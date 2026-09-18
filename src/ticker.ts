@@ -1,0 +1,120 @@
+// Turns due cron schedules into mail. `SELECT ... FOR UPDATE SKIP LOCKED`
+// means two tickers racing the same table split due rows rather than
+// double-fire; a schedule that missed several ticks fires once for the
+// most recent due minute, never once per missed tick.
+import { eq } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+
+import { nextCronFireAfter } from "./cron";
+import { cronScheduleTable } from "./schema";
+
+export type CronDb<TSchema extends Record<string, unknown> = Record<string, unknown>> =
+  PostgresJsDatabase<TSchema>;
+
+/** A due schedule handed to the host. The sender identity is the host's to
+ * decide: only the host knows which addresses its mail transport
+ * authorizes, so this package names the tenant and never invents an
+ * address for it. */
+export type DeliverCronMail = (message: {
+  to: string[];
+  subject: string;
+  body: string;
+  tenantId: string;
+}) => Promise<void> | void;
+
+export type CreateCronTickerOpts<
+  TSchema extends Record<string, unknown> = Record<string, unknown>,
+> = {
+  db: CronDb<TSchema>;
+  deliver: DeliverCronMail;
+  intervalMs: number;
+  /** Told about a delivery that failed, so the host can report it. */
+  onDeliveryError?: (error: unknown, schedule: { id: string; tenantId: string }) => void;
+};
+
+export type CronTicker = {
+  start(): void;
+  stop(): void;
+};
+
+/** A freshly saved schedule is due at its first matching minute after
+ * creation, not retroactively for every minute since the epoch. */
+function isDue(
+  row: { expression: string; lastFiredAt: Date | null; createdAt: Date },
+  now: Date,
+): boolean {
+  const after = row.lastFiredAt ?? row.createdAt;
+  try {
+    return nextCronFireAfter(row.expression, after) <= now;
+  } catch {
+    // report-error-ignore: an expression with no fire in the lookahead
+    // window is simply never due, not an operational failure.
+    return false;
+  }
+}
+
+async function tick<TSchema extends Record<string, unknown>>(
+  db: CronDb<TSchema>,
+  deliver: DeliverCronMail,
+  onDeliveryError: (error: unknown, schedule: { id: string; tenantId: string }) => void,
+) {
+  await db.transaction(async (tx) => {
+    const now = new Date();
+    // Every row, locked against a concurrent ticker (SKIP LOCKED means two
+    // tickers racing this table split the due rows rather than double-fire
+    // any of them); which ones are actually due is a JS-side check because
+    // "due" depends on parsing each row's own cron expression.
+    const candidates = await tx
+      .select()
+      .from(cronScheduleTable)
+      .for("update", { skipLocked: true });
+
+    for (const row of candidates.filter((row) => isDue(row, now))) {
+      // One schedule's failed delivery is its own: the tick still advances
+      // every due row, so a permanently undeliverable schedule cannot block
+      // the rest of the table or re-fire every minute forever.
+      try {
+        await deliver({
+          to: [row.toAddress],
+          subject: row.subject,
+          body: row.body,
+          tenantId: row.tenantId,
+        });
+      } catch (error) {
+        onDeliveryError(error, { id: row.id, tenantId: row.tenantId });
+      }
+      await tx
+        .update(cronScheduleTable)
+        .set({ lastFiredAt: now })
+        .where(eq(cronScheduleTable.id, row.id));
+    }
+  });
+}
+
+/** Ticks every `intervalMs`, delivering each due schedule as mail. */
+export function createCronTicker<TSchema extends Record<string, unknown>>(
+  opts: CreateCronTickerOpts<TSchema>,
+): CronTicker {
+  const onDeliveryError = opts.onDeliveryError ?? (() => undefined);
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let inFlight: Promise<void> | undefined;
+
+  const runTick = () => {
+    if (inFlight !== undefined) return;
+    inFlight = tick(opts.db, opts.deliver, onDeliveryError).finally(() => {
+      inFlight = undefined;
+    });
+  };
+
+  return {
+    start() {
+      if (timer !== undefined) return;
+      timer = setInterval(runTick, opts.intervalMs);
+    },
+    stop() {
+      if (timer === undefined) return;
+      clearInterval(timer);
+      timer = undefined;
+    },
+  };
+}
