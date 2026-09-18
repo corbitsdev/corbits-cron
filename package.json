@@ -1,0 +1,31 @@
+{
+  "name": "@corbits/cron",
+  "version": "0.1.0",
+  "description": "Cron schedules for an Interchange hub: a CRUD mount plus a ticker that turns a due row into run-trigger mail",
+  "license": "LGPL-2.1-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./migrations": "./src/migrations.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./src"
+  },
+  "dependencies": {
+    "arktype": "^2.2.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.11.9",
+    "postgres": "^3.4.8",
+    "@intx/db": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.9",
+    "typescript": "5.9.3"
+  }
+}
