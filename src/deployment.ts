@@ -43,3 +43,21 @@ export async function resolveLiveDeployment<TSchema extends Record<string, unkno
   if (row === undefined) return null;
   return { runId: row.runId, address: `${row.runId}@${row.domain}` };
 }
+
+/** Whether the tenant still has a workflow definition with this name, live
+ * run or not. A hub restart leaves the definition and drops its run, so this
+ * is what separates "waiting for the agent to come back" from "deleted". */
+export async function definitionExists<TSchema extends Record<string, unknown>>(
+  db: PostgresJsDatabase<TSchema>,
+  tenantId: string,
+  definitionName: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: workflowDefinition.id })
+    .from(workflowDefinition)
+    .where(
+      and(eq(workflowDefinition.tenantId, tenantId), eq(workflowDefinition.name, definitionName)),
+    )
+    .limit(1);
+  return row !== undefined;
+}

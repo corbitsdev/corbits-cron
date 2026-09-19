@@ -20,8 +20,11 @@ export const cronScheduleTable = cronSchema.table("schedule", {
   subject: text("subject").notNull(),
   body: text("body").notNull(),
   lastFiredAt: timestamp("last_fired_at", { withTimezone: true }),
-  // Set once when the target has no live deployment left; a stopped
-  // schedule never fires again.
+  // Set while the agent exists but has no live run — a hub restart, say.
+  // Cleared by the first tick that delivers again.
+  waitingSince: timestamp("waiting_since", { withTimezone: true }),
+  // Set once when the targeted agent is deleted; a stopped schedule never
+  // fires again.
   stoppedAt: timestamp("stopped_at", { withTimezone: true }),
   stoppedReason: text("stopped_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -45,10 +48,12 @@ function cronMigrationSql(tenantSchema: string): string {
       "subject" text NOT NULL,
       "body" text NOT NULL,
       "last_fired_at" timestamptz,
+      "waiting_since" timestamptz,
       "stopped_at" timestamptz,
       "stopped_reason" text,
       "created_at" timestamptz NOT NULL DEFAULT now()
     );
+    ALTER TABLE "cron"."schedule" ADD COLUMN IF NOT EXISTS "waiting_since" timestamptz;
     CREATE INDEX IF NOT EXISTS "cron_schedule_tenant_id_idx" ON "cron"."schedule" ("tenant_id");
   `;
 }
