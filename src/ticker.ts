@@ -6,7 +6,7 @@ import { eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 import { nextCronFireAfter } from "./cron";
-import { definitionExists, resolveLiveDeployment } from "./deployment";
+import { definitionExists, failStaleAnchorRun, isUnroutableRunTrigger, resolveLiveDeployment } from "./deployment";
 import { cronScheduleTable } from "./schema";
 
 export type CronDb<TSchema extends Record<string, unknown> = Record<string, unknown>> =
@@ -139,6 +139,15 @@ async function tick<TSchema extends Record<string, unknown>>(
           tenantId: row.tenantId,
         });
       } catch (error) {
+        // The deliverer names the dead run it could not route to. When that
+        // run's sidecar can never come back (its allocation already settled),
+        // fail the stale anchor now: the next tick then sees no live
+        // deployment and waits for the agent to come back instead of
+        // delivering into the dead run every minute. The error is still
+        // reported — it is a real delivery failure, once, not tick noise.
+        if (isUnroutableRunTrigger(error)) {
+          await failStaleAnchorRun(tx, error.runId, now);
+        }
         onDeliveryError(error, { id: row.id, tenantId: row.tenantId });
       }
       await tx

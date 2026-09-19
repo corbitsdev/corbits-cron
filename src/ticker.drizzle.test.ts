@@ -4,14 +4,16 @@
 // targets it.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { createDB, dropSchema, runMigrations } from "@intx/db";
+import { createDB, dropSchema, runMigrations, schema } from "@intx/db";
 import { eq } from "drizzle-orm";
 
 import { applyCronMigrations, cronScheduleTable } from "./schema";
 import { createCronTicker } from "./ticker";
+import { RUN_GRANTS_NOT_ROUTABLE } from "./deployment";
 import {
   dbTargetFromUrl,
   deleteDefinition,
+  seedAllocation,
   seedDeployment,
   seedLiveRun,
   seedTenant,
@@ -75,8 +77,15 @@ describeIfDb("createCronTicker", () => {
         },
       });
       ticker.start();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      for (let i = 0; i < 250 && delivered.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       ticker.stop();
+      // Let an in-flight tick settle before close() ends the client: a tick
+      // killed mid-flight rejects with CONNECTION_ENDED, which bun attributes
+      // to whatever test runs next.
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       expect(delivered).toEqual([{ subject: "due", to: [`${runId}@${tenantDomainFor(tenantId)}`] }]);
 
@@ -121,7 +130,10 @@ describeIfDb("createCronTicker", () => {
         onScheduleWaiting: (schedule) => waiting.push(schedule.id),
       });
       ticker.start();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      for (let i = 0; i < 250 && waiting.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
 
       expect(delivered).toEqual([]);
       expect(stopped).toEqual([]);
@@ -136,8 +148,13 @@ describeIfDb("createCronTicker", () => {
       expect(waitingRow?.stoppedAt).toBeNull();
 
       const runId = await seedLiveRun(db, tenantId, "agent-wait-source");
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      for (let i = 0; i < 250 && delivered.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       ticker.stop();
+      // Let an in-flight tick settle before close() ends the client.
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       expect(delivered).toEqual([`${runId}@${tenantDomainFor(tenantId)}`]);
       const [firedRow] = await db
@@ -181,8 +198,13 @@ describeIfDb("createCronTicker", () => {
         onScheduleStopped: (schedule) => stopped.push(schedule.id),
       });
       ticker.start();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      for (let i = 0; i < 250 && stopped.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       ticker.stop();
+      // Let an in-flight tick settle before close() ends the client.
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       expect(fired).toBe(0);
       expect(stopped).toEqual([id]);
@@ -232,14 +254,157 @@ describeIfDb("createCronTicker", () => {
       });
       tickerA.start();
       tickerB.start();
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      for (let i = 0; i < 250 && fireCount === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       tickerA.stop();
       tickerB.stop();
+      // Let an in-flight tick settle before close() ends the client.
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       expect(fireCount).toBe(1);
     } finally {
       await closeA();
       await closeB();
+    }
+  });
+
+  test("an unroutable dead run with a settled allocation fails the stale anchor, then waits", async () => {
+    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    try {
+      const tenantId = `tnt_cron_stale_${randomUUID().slice(0, 8)}`;
+      await seedTenant(db, tenantId);
+      // A previous stack's death: the anchor is still "running" but its
+      // sidecar is gone and its allocation already settled released.
+      const runId = await seedDeployment(db, tenantId, "agent-stale-source", "running");
+      await seedAllocation(db, runId, tenantId, "released");
+
+      const id = `sched_stale_${randomUUID().slice(0, 8)}`;
+      await db.insert(cronScheduleTable).values({
+        id,
+        tenantId,
+        expression: "* * * * *",
+        definitionName: "agent-stale-source",
+        subject: "stale",
+        body: "dead run",
+        createdAt: new Date(Date.now() - 2 * 60_000),
+      });
+
+      const errors: unknown[] = [];
+      const waiting: string[] = [];
+      let deliveries = 0;
+      const ticker = createCronTicker({
+        db,
+        intervalMs: 20,
+        deliver: () => {
+          deliveries++;
+          const address = `${runId}@${tenantDomainFor(tenantId)}`;
+          throw Object.assign(new Error(`run grants not routable for ${address} (run ${runId})`), {
+            code: RUN_GRANTS_NOT_ROUTABLE,
+            address,
+            runId,
+          });
+        },
+        onDeliveryError: (error) => errors.push(error),
+        onScheduleWaiting: (schedule) => waiting.push(schedule.id),
+      });
+      ticker.start();
+      // Wait for the first (failing) delivery to settle the stale anchor.
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      let runStatus: string | undefined;
+      for (let i = 0; i < 250; i++) {
+        const [run] = await db
+          .select({ status: schema.workflowRun.status })
+          .from(schema.workflowRun)
+          .where(eq(schema.workflowRun.id, runId));
+        runStatus = run?.status;
+        if (errors.length >= 1 && runStatus === "failed") break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      // The failure is reported — as a real failure naming the run — and the
+      // stale anchor is marked terminal.
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      expect(String((errors[0] as Error).message)).toContain("run grants not routable");
+      expect(String((errors[0] as Error).message)).toContain(runId);
+      expect(runStatus).toBe("failed");
+      const firedOnce = deliveries;
+      expect(firedOnce).toBeGreaterThanOrEqual(1);
+
+      // Simulate the next due minute: the schedule is due again, but the dead
+      // run is gone, so the ticker waits for the agent to come back instead
+      // of delivering into the dead run every tick.
+      await db
+        .update(cronScheduleTable)
+        .set({ lastFiredAt: null })
+        .where(eq(cronScheduleTable.id, id));
+      for (let i = 0; i < 250 && waiting.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      ticker.stop();
+      // Let an in-flight tick settle before close() ends the client.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(waiting).toEqual([id]);
+      expect(deliveries).toBe(firedOnce);
+    } finally {
+      await close();
+    }
+  });
+
+  test("an unroutable run whose allocation is still active stays live", async () => {
+    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    try {
+      const tenantId = `tnt_cron_live_${randomUUID().slice(0, 8)}`;
+      await seedTenant(db, tenantId);
+      const runId = await seedDeployment(db, tenantId, "agent-live-source", "running");
+      await seedAllocation(db, runId, tenantId, "allocated");
+
+      const id = `sched_live_${randomUUID().slice(0, 8)}`;
+      await db.insert(cronScheduleTable).values({
+        id,
+        tenantId,
+        expression: "* * * * *",
+        definitionName: "agent-live-source",
+        subject: "live",
+        body: "sidecar may reconnect",
+        createdAt: new Date(Date.now() - 2 * 60_000),
+      });
+
+      const errors: unknown[] = [];
+      const ticker = createCronTicker({
+        db,
+        intervalMs: 20,
+        deliver: () => {
+          const address = `${runId}@${tenantDomainFor(tenantId)}`;
+          throw Object.assign(new Error(`run grants not routable for ${address} (run ${runId})`), {
+            code: RUN_GRANTS_NOT_ROUTABLE,
+            address,
+            runId,
+          });
+        },
+        onDeliveryError: (error) => errors.push(error),
+      });
+      ticker.start();
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      for (let i = 0; i < 250 && errors.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      ticker.stop();
+      // Let an in-flight tick settle before close() ends the client.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      // Still reported — the sidecar may just be reconnecting — but the run
+      // is untouched: only a settled allocation proves the sidecar is gone.
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      const [run] = await db
+        .select({ status: schema.workflowRun.status })
+        .from(schema.workflowRun)
+        .where(eq(schema.workflowRun.id, runId));
+      expect(run?.status).toBe("running");
+    } finally {
+      await close();
     }
   });
 });

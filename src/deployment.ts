@@ -3,6 +3,7 @@
 // restart or redeploy, so it is resolved at fire time, never stored.
 import {
   liveWorkflowRunStatuses,
+  sidecarAllocation,
   tenant,
   workflowDefinition,
   workflowRun,
@@ -60,4 +61,61 @@ export async function definitionExists<TSchema extends Record<string, unknown>>(
     )
     .limit(1);
   return row !== undefined;
+}
+
+/**
+ * `code` values the run-trigger deliverer rejects with when the deployment
+ * address has no live socket and no disconnect queue. Contract owned by
+ * `@corbits/webhooks` (`src/deliver.ts`): matched structurally here so this
+ * package stays dependency-free and speaks to the deliverer through the
+ * `MailDeliverer` shape alone.
+ */
+export const RUN_GRANTS_NOT_ROUTABLE = "run_grants_not_routable";
+export const RUN_MAIL_NOT_ROUTABLE = "run_mail_not_routable";
+
+export type UnroutableRunTrigger = {
+  code: typeof RUN_GRANTS_NOT_ROUTABLE | typeof RUN_MAIL_NOT_ROUTABLE;
+  address: string;
+  runId: string;
+};
+
+/** Structural match for the deliverer's unroutable-trigger rejection. */
+export function isUnroutableRunTrigger(error: unknown): error is UnroutableRunTrigger {
+  if (typeof error !== "object" || error === null) return false;
+  const rec = error as Record<string, unknown>;
+  return (
+    (rec["code"] === RUN_GRANTS_NOT_ROUTABLE || rec["code"] === RUN_MAIL_NOT_ROUTABLE) &&
+    typeof rec["address"] === "string" &&
+    typeof rec["runId"] === "string"
+  );
+}
+
+/**
+ * Fail a stale live anchor run whose sidecar can never come back: its
+ * allocation already settled `released` or `failed`, so no provisioner will
+ * ever serve that address again. A previous stack's death leaves exactly this
+ * behind — a `running` anchor row with a dead sidecar — and the row keeps
+ * receiving deliveries into the dead run until something marks it terminal
+ * (previously only the web client did). Returns true when this call flipped
+ * the row; false when the allocation is still active, missing, or the row is
+ * already terminal.
+ */
+export async function failStaleAnchorRun<TSchema extends Record<string, unknown>>(
+  db: PostgresJsDatabase<TSchema>,
+  runId: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const [allocation] = await db
+    .select({ status: sidecarAllocation.status })
+    .from(sidecarAllocation)
+    .where(eq(sidecarAllocation.anchorRunId, runId))
+    .limit(1);
+  if (allocation === undefined) return false;
+  if (allocation.status !== "released" && allocation.status !== "failed") return false;
+  const updated = await db
+    .update(workflowRun)
+    .set({ status: "failed", endedAt: now })
+    .where(and(eq(workflowRun.id, runId), inArray(workflowRun.status, [...liveWorkflowRunStatuses])))
+    .returning({ id: workflowRun.id });
+  return updated.length > 0;
 }

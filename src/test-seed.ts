@@ -37,7 +37,7 @@ export async function seedDeployment(
   db: TestDb,
   tenantId: string,
   definitionName: string,
-  status: "deployed" | "completed" = "deployed",
+  status: "deployed" | "running" | "completed" = "deployed",
 ): Promise<string> {
   const definitionId = `wfd_${randomUUID().slice(0, 8)}`;
   await db
@@ -77,6 +77,26 @@ export async function seedLiveRun(
     status: "deployed",
   });
   return runId;
+}
+
+/** A sidecar allocation for an anchor run — the provisioner-side record of
+ * whether that run's sidecar can ever serve its address again. */
+export async function seedAllocation(
+  db: TestDb,
+  anchorRunId: string,
+  tenantId: string,
+  status: "released" | "failed" | "allocated" = "released",
+): Promise<void> {
+  await db.insert(schema.sidecarAllocation).values({
+    id: `sca_${randomUUID().slice(0, 8)}`,
+    anchorRunId,
+    tenantId,
+    provisionerId: "prov_test",
+    provisionerApiVersion: 1,
+    provisionerBindingFingerprint: "fp_test",
+    placementSharing: "exclusive",
+    status,
+  });
 }
 
 /** Deletes the agent itself: its runs, then its definition. */

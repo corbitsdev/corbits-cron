@@ -72,7 +72,16 @@ tickers racing the same table split the due rows rather than double-fire
 any of them, and a schedule that missed several ticks fires once for the
 most recent due minute, never once per missed tick. A schedule's failed
 delivery is reported through `onDeliveryError` and never blocks the rest of
-the table.
+the table. When the deliverer rejects with an unroutable run trigger (`code`
+`run_grants_not_routable` / `run_mail_not_routable`, carrying the dead run's
+`address` and `runId` — the contract `createRunTriggerDeliverer` owns), the
+ticker additionally fails that anchor run when its sidecar can never come
+back (its allocation already settled `released` or `failed`): a previous
+stack's death leaves a `running` anchor with a dead address behind, and
+failing it turns per-tick noise into one real failure after which the
+schedule waits for the agent to come back. An unroutable run whose
+allocation is still active is left alone — its sidecar may just be
+reconnecting.
 
 ## Deliverer adapter (`createRunTriggerCronDeliver`)
 
