@@ -2,6 +2,7 @@
 // package index: test-only.
 import { randomUUID } from "node:crypto";
 import { createDB, schema } from "@intx/db";
+import { and, eq } from "drizzle-orm";
 
 type TestDb = ReturnType<typeof createDB>["db"];
 
@@ -47,4 +48,54 @@ export async function seedDeployment(
     .insert(schema.workflowRun)
     .values({ id: runId, definitionId, anchorRunId: runId, tenantId, status });
   return runId;
+}
+
+/** A second anchor run for a definition that already exists — the agent
+ * coming back after a restart. */
+export async function seedLiveRun(
+  db: TestDb,
+  tenantId: string,
+  definitionName: string,
+): Promise<string> {
+  const [definition] = await db
+    .select({ id: schema.workflowDefinition.id })
+    .from(schema.workflowDefinition)
+    .where(
+      and(
+        eq(schema.workflowDefinition.tenantId, tenantId),
+        eq(schema.workflowDefinition.name, definitionName),
+      ),
+    )
+    .limit(1);
+  if (definition === undefined) throw new Error(`no definition named ${definitionName}`);
+  const runId = `run_${randomUUID().slice(0, 8)}`;
+  await db.insert(schema.workflowRun).values({
+    id: runId,
+    definitionId: definition.id,
+    anchorRunId: runId,
+    tenantId,
+    status: "deployed",
+  });
+  return runId;
+}
+
+/** Deletes the agent itself: its runs, then its definition. */
+export async function deleteDefinition(
+  db: TestDb,
+  tenantId: string,
+  definitionName: string,
+): Promise<void> {
+  const rows = await db
+    .select({ id: schema.workflowDefinition.id })
+    .from(schema.workflowDefinition)
+    .where(
+      and(
+        eq(schema.workflowDefinition.tenantId, tenantId),
+        eq(schema.workflowDefinition.name, definitionName),
+      ),
+    );
+  for (const row of rows) {
+    await db.delete(schema.workflowRun).where(eq(schema.workflowRun.definitionId, row.id));
+    await db.delete(schema.workflowDefinition).where(eq(schema.workflowDefinition.id, row.id));
+  }
 }

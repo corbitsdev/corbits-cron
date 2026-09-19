@@ -6,7 +6,7 @@ import { eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 import { nextCronFireAfter } from "./cron";
-import { resolveLiveDeployment } from "./deployment";
+import { definitionExists, resolveLiveDeployment } from "./deployment";
 import { cronScheduleTable } from "./schema";
 
 export type CronDb<TSchema extends Record<string, unknown> = Record<string, unknown>> =
@@ -31,13 +31,20 @@ export type CreateCronTickerOpts<
   intervalMs: number;
   /** Told about a delivery that failed, so the host can report it. */
   onDeliveryError?: (error: unknown, schedule: { id: string; tenantId: string }) => void;
-  /** Told once when a schedule stops because its target has no live
-   * deployment left. A later redeploy does not resume it. */
+  /** Told once when a schedule stops because the agent it targets was
+   * deleted. A later redeploy does not resume it. */
   onScheduleStopped?: (schedule: {
     id: string;
     tenantId: string;
     definitionName: string;
     reason: string;
+  }) => void;
+  /** Told once each time a schedule starts waiting for its agent's next
+   * run, not on every tick it spends waiting. */
+  onScheduleWaiting?: (schedule: {
+    id: string;
+    tenantId: string;
+    definitionName: string;
   }) => void;
 };
 
@@ -62,7 +69,7 @@ function isDue(
   }
 }
 
-const DEPLOYMENT_GONE = "deployment_gone";
+const AGENT_DELETED = "agent_deleted";
 
 async function tick<TSchema extends Record<string, unknown>>(
   db: CronDb<TSchema>,
@@ -74,6 +81,7 @@ async function tick<TSchema extends Record<string, unknown>>(
     definitionName: string;
     reason: string;
   }) => void,
+  onScheduleWaiting: (schedule: { id: string; tenantId: string; definitionName: string }) => void,
 ) {
   await db.transaction(async (tx) => {
     const now = new Date();
@@ -92,15 +100,31 @@ async function tick<TSchema extends Record<string, unknown>>(
       // address is resolved now rather than stored.
       const deployment = await resolveLiveDeployment(tx, row.tenantId, row.definitionName);
       if (deployment === null) {
+        // A restart leaves the agent's definition and drops its run: wait for
+        // the run to come back rather than killing the schedule over a gap.
+        if (await definitionExists(tx, row.tenantId, row.definitionName)) {
+          if (row.waitingSince === null) {
+            await tx
+              .update(cronScheduleTable)
+              .set({ waitingSince: now })
+              .where(eq(cronScheduleTable.id, row.id));
+            onScheduleWaiting({
+              id: row.id,
+              tenantId: row.tenantId,
+              definitionName: row.definitionName,
+            });
+          }
+          continue;
+        }
         await tx
           .update(cronScheduleTable)
-          .set({ stoppedAt: now, stoppedReason: DEPLOYMENT_GONE })
+          .set({ stoppedAt: now, stoppedReason: AGENT_DELETED })
           .where(eq(cronScheduleTable.id, row.id));
         onScheduleStopped({
           id: row.id,
           tenantId: row.tenantId,
           definitionName: row.definitionName,
-          reason: DEPLOYMENT_GONE,
+          reason: AGENT_DELETED,
         });
         continue;
       }
@@ -119,7 +143,7 @@ async function tick<TSchema extends Record<string, unknown>>(
       }
       await tx
         .update(cronScheduleTable)
-        .set({ lastFiredAt: now })
+        .set({ lastFiredAt: now, waitingSince: null })
         .where(eq(cronScheduleTable.id, row.id));
     }
   });
@@ -131,12 +155,13 @@ export function createCronTicker<TSchema extends Record<string, unknown>>(
 ): CronTicker {
   const onDeliveryError = opts.onDeliveryError ?? (() => undefined);
   const onScheduleStopped = opts.onScheduleStopped ?? (() => undefined);
+  const onScheduleWaiting = opts.onScheduleWaiting ?? (() => undefined);
   let timer: ReturnType<typeof setInterval> | undefined;
   let inFlight: Promise<void> | undefined;
 
   const runTick = () => {
     if (inFlight !== undefined) return;
-    inFlight = tick(opts.db, opts.deliver, onDeliveryError, onScheduleStopped).finally(() => {
+    inFlight = tick(opts.db, opts.deliver, onDeliveryError, onScheduleStopped, onScheduleWaiting).finally(() => {
       inFlight = undefined;
     });
   };

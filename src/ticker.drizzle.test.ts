@@ -9,7 +9,14 @@ import { eq } from "drizzle-orm";
 
 import { applyCronMigrations, cronScheduleTable } from "./schema";
 import { createCronTicker } from "./ticker";
-import { dbTargetFromUrl, seedDeployment, seedTenant, tenantDomainFor } from "./test-seed";
+import {
+  dbTargetFromUrl,
+  deleteDefinition,
+  seedDeployment,
+  seedLiveRun,
+  seedTenant,
+  tenantDomainFor,
+} from "./test-seed";
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIfDb = databaseUrl === undefined ? describe.skip : describe;
@@ -83,12 +90,74 @@ describeIfDb("createCronTicker", () => {
     }
   });
 
-  test("a schedule whose deployment is gone stops instead of firing", async () => {
+  test("no live run but the agent is still there: waits, then delivers when it returns", async () => {
+    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    try {
+      const tenantId = `tnt_cron_wait_${randomUUID().slice(0, 8)}`;
+      await seedTenant(db, tenantId);
+      await seedDeployment(db, tenantId, "agent-wait-source", "completed");
+
+      const id = `sched_wait_${randomUUID().slice(0, 8)}`;
+      await db.insert(cronScheduleTable).values({
+        id,
+        tenantId,
+        expression: "* * * * *",
+        definitionName: "agent-wait-source",
+        subject: "waiting",
+        body: "come back",
+        createdAt: new Date(Date.now() - 2 * 60_000),
+      });
+
+      const delivered: string[] = [];
+      const stopped: string[] = [];
+      const waiting: string[] = [];
+      const ticker = createCronTicker({
+        db,
+        intervalMs: 20,
+        deliver: (message) => {
+          delivered.push(message.to[0] ?? "");
+        },
+        onScheduleStopped: (schedule) => stopped.push(schedule.id),
+        onScheduleWaiting: (schedule) => waiting.push(schedule.id),
+      });
+      ticker.start();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(delivered).toEqual([]);
+      expect(stopped).toEqual([]);
+      // Reported once, however many ticks the gap lasts.
+      expect(waiting).toEqual([id]);
+      const [waitingRow] = await db
+        .select()
+        .from(cronScheduleTable)
+        .where(eq(cronScheduleTable.id, id));
+      expect(waitingRow?.waitingSince).not.toBeNull();
+      expect(waitingRow?.lastFiredAt).toBeNull();
+      expect(waitingRow?.stoppedAt).toBeNull();
+
+      const runId = await seedLiveRun(db, tenantId, "agent-wait-source");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      ticker.stop();
+
+      expect(delivered).toEqual([`${runId}@${tenantDomainFor(tenantId)}`]);
+      const [firedRow] = await db
+        .select()
+        .from(cronScheduleTable)
+        .where(eq(cronScheduleTable.id, id));
+      expect(firedRow?.lastFiredAt).not.toBeNull();
+      expect(firedRow?.waitingSince).toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
+  test("a schedule whose agent was deleted stops instead of firing", async () => {
     const { db, close } = createDB({ ...target, schema: SCHEMA });
     try {
       const tenantId = `tnt_cron_gone_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
-      await seedDeployment(db, tenantId, "agent-gone-source", "completed");
+      await seedDeployment(db, tenantId, "agent-gone-source");
+      await deleteDefinition(db, tenantId, "agent-gone-source");
 
       const id = `sched_gone_${randomUUID().slice(0, 8)}`;
       await db.insert(cronScheduleTable).values({
@@ -120,7 +189,7 @@ describeIfDb("createCronTicker", () => {
 
       const [row] = await db.select().from(cronScheduleTable).where(eq(cronScheduleTable.id, id));
       expect(row?.stoppedAt).not.toBeNull();
-      expect(row?.stoppedReason).toBe("deployment_gone");
+      expect(row?.stoppedReason).toBe("agent_deleted");
       expect(row?.lastFiredAt).toBeNull();
     } finally {
       await close();

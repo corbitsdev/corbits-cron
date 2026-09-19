@@ -6,7 +6,7 @@ import { eq, and } from "drizzle-orm";
 import type { Env, Hono } from "hono";
 
 import { isValidCronExpression } from "./cron";
-import { resolveLiveDeployment } from "./deployment";
+import { definitionExists } from "./deployment";
 import { cronScheduleTable } from "./schema";
 import type { CronDb } from "./ticker";
 
@@ -48,9 +48,10 @@ export function mountCron<E extends Env>(app: Hono<E>, opts: MountCronOpts): Hon
     if (!isValidCronExpression(parsed.expression)) {
       return c.json({ error: "invalid_expression" }, 400);
     }
-    // A schedule with nothing live to mail is a dead row from birth.
-    if ((await resolveLiveDeployment(db, tenantId, parsed.definitionName)) === null) {
-      return c.json({ error: "no_live_deployment" }, 400);
+    // Only a name no agent carries is a dead row from birth: an agent that is
+    // merely between runs delivers as soon as it comes back.
+    if (!(await definitionExists(db, tenantId, parsed.definitionName))) {
+      return c.json({ error: "unknown_definition" }, 400);
     }
     const [row] = await db
       .insert(cronScheduleTable)
