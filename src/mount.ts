@@ -6,6 +6,7 @@ import { eq, and } from "drizzle-orm";
 import type { Env, Hono } from "hono";
 
 import { isValidCronExpression } from "./cron";
+import { resolveLiveDeployment } from "./deployment";
 import { cronScheduleTable } from "./schema";
 import type { CronDb } from "./ticker";
 
@@ -18,7 +19,7 @@ export type MountCronOpts = {
 
 const CreateScheduleBody = type({
   expression: "string",
-  toAddress: "string",
+  definitionName: "string",
   subject: "string",
   body: "string",
 });
@@ -47,13 +48,17 @@ export function mountCron<E extends Env>(app: Hono<E>, opts: MountCronOpts): Hon
     if (!isValidCronExpression(parsed.expression)) {
       return c.json({ error: "invalid_expression" }, 400);
     }
+    // A schedule with nothing live to mail is a dead row from birth.
+    if ((await resolveLiveDeployment(db, tenantId, parsed.definitionName)) === null) {
+      return c.json({ error: "no_live_deployment" }, 400);
+    }
     const [row] = await db
       .insert(cronScheduleTable)
       .values({
         id: randomUUID(),
         tenantId,
         expression: parsed.expression,
-        toAddress: parsed.toAddress,
+        definitionName: parsed.definitionName,
         subject: parsed.subject,
         body: parsed.body,
       })

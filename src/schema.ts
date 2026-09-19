@@ -14,10 +14,16 @@ export const cronScheduleTable = cronSchema.table("schedule", {
     .notNull()
     .references(() => hostTenant.id, { onDelete: "cascade" }),
   expression: text("expression").notNull(),
-  toAddress: text("to_address").notNull(),
+  // The agent this schedule targets, by its workflow definition's name —
+  // stable across redeploys, unlike a run address or a definition id.
+  definitionName: text("definition_name").notNull(),
   subject: text("subject").notNull(),
   body: text("body").notNull(),
   lastFiredAt: timestamp("last_fired_at", { withTimezone: true }),
+  // Set once when the target has no live deployment left; a stopped
+  // schedule never fires again.
+  stoppedAt: timestamp("stopped_at", { withTimezone: true }),
+  stoppedReason: text("stopped_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -35,10 +41,12 @@ function cronMigrationSql(tenantSchema: string): string {
       "id" text PRIMARY KEY,
       "tenant_id" text NOT NULL REFERENCES ${tenantTable}("id") ON DELETE CASCADE,
       "expression" text NOT NULL,
-      "to_address" text NOT NULL,
+      "definition_name" text NOT NULL,
       "subject" text NOT NULL,
       "body" text NOT NULL,
       "last_fired_at" timestamptz,
+      "stopped_at" timestamptz,
+      "stopped_reason" text,
       "created_at" timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS "cron_schedule_tenant_id_idx" ON "cron"."schedule" ("tenant_id");
