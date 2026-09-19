@@ -1,10 +1,23 @@
 # @corbits/cron
 
-Cron schedules for an Interchange hub. A tenant saves a cron expression plus
-a mail (`to` / `subject` / `body`); `createCronTicker` polls for due
-schedules and hands each to the host's own transport, so a
-schedule-triggered workflow is just a `mail`-triggered one addressed at
-itself. The vendored Interchange workflow-trigger grammar has no native
+Cron schedules for an Interchange hub. A tenant saves a cron expression, the
+agent to wake, and the mail to send it (`subject` / `body`);
+`createCronTicker` polls for due schedules and hands each to the host's own
+transport, so a schedule-triggered workflow is just a `mail`-triggered one
+addressed at itself.
+
+## The schedule contract
+
+A schedule targets an agent's **live deployment**, named by its workflow
+definition's name (the name of the `workflow`-kind asset its source lives
+in) — stable across redeploys, unlike a run address or a definition id. At
+fire time the ticker resolves that name to the tenant's newest live anchor
+run and mails `<run id>@<tenant domain>`, so a schedule keeps working after
+a hub restart or a redeploy hands the agent a new run. Creating a schedule
+for a name with no live deployment is rejected. When a deployment is gone at
+fire time the schedule is stopped (`stopped_at` plus `stopped_reason`),
+reported once through `onScheduleStopped`, and never fires again — a later
+redeploy does not resume it; create a new schedule. The vendored Interchange workflow-trigger grammar has no native
 `schedule` trigger — this package is the bridge, not a fork of it.
 
 ## Install
@@ -33,7 +46,7 @@ app.route("/", cronApp);
 | Route | |
 |---|---|
 | `GET /api/tenants/:tenantId/cron` | List the tenant's schedules |
-| `POST /api/tenants/:tenantId/cron` | Create a schedule (`expression`, `toAddress`, `subject`, `body`) |
+| `POST /api/tenants/:tenantId/cron` | Create a schedule (`expression`, `definitionName`, `subject`, `body`); 400 `no_live_deployment` when nothing live carries that name |
 | `DELETE /api/tenants/:tenantId/cron/:id` | Remove a schedule |
 
 ## Ticker (`createCronTicker`)
@@ -90,9 +103,10 @@ Interchange's `tenant` table:
 | `id` | primary key |
 | `tenant_id` | FK → `tenant.id`, cascades on delete |
 | `expression` | 5-field cron string |
-| `to_address` | mail recipient |
+| `definition_name` | the targeted agent's workflow definition name |
 | `subject`, `body` | mail content |
 | `last_fired_at` | last tick this schedule fired |
+| `stopped_at`, `stopped_reason` | set when the target's deployment is gone; a stopped schedule never fires again |
 | `created_at` | a fresh schedule is due at its first matching minute after this, never retroactively |
 
 Applied idempotently, inside one advisory-locked transaction so concurrent

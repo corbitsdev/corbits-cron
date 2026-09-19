@@ -2,10 +2,11 @@
 // means two tickers racing the same table split due rows rather than
 // double-fire; a schedule that missed several ticks fires once for the
 // most recent due minute, never once per missed tick.
-import { eq } from "drizzle-orm";
+import { eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 import { nextCronFireAfter } from "./cron";
+import { resolveLiveDeployment } from "./deployment";
 import { cronScheduleTable } from "./schema";
 
 export type CronDb<TSchema extends Record<string, unknown> = Record<string, unknown>> =
@@ -30,6 +31,14 @@ export type CreateCronTickerOpts<
   intervalMs: number;
   /** Told about a delivery that failed, so the host can report it. */
   onDeliveryError?: (error: unknown, schedule: { id: string; tenantId: string }) => void;
+  /** Told once when a schedule stops because its target has no live
+   * deployment left. A later redeploy does not resume it. */
+  onScheduleStopped?: (schedule: {
+    id: string;
+    tenantId: string;
+    definitionName: string;
+    reason: string;
+  }) => void;
 };
 
 export type CronTicker = {
@@ -53,10 +62,18 @@ function isDue(
   }
 }
 
+const DEPLOYMENT_GONE = "deployment_gone";
+
 async function tick<TSchema extends Record<string, unknown>>(
   db: CronDb<TSchema>,
   deliver: DeliverCronMail,
   onDeliveryError: (error: unknown, schedule: { id: string; tenantId: string }) => void,
+  onScheduleStopped: (schedule: {
+    id: string;
+    tenantId: string;
+    definitionName: string;
+    reason: string;
+  }) => void,
 ) {
   await db.transaction(async (tx) => {
     const now = new Date();
@@ -67,15 +84,32 @@ async function tick<TSchema extends Record<string, unknown>>(
     const candidates = await tx
       .select()
       .from(cronScheduleTable)
+      .where(isNull(cronScheduleTable.stoppedAt))
       .for("update", { skipLocked: true });
 
     for (const row of candidates.filter((row) => isDue(row, now))) {
+      // The run behind a target dies on every restart and redeploy, so the
+      // address is resolved now rather than stored.
+      const deployment = await resolveLiveDeployment(tx, row.tenantId, row.definitionName);
+      if (deployment === null) {
+        await tx
+          .update(cronScheduleTable)
+          .set({ stoppedAt: now, stoppedReason: DEPLOYMENT_GONE })
+          .where(eq(cronScheduleTable.id, row.id));
+        onScheduleStopped({
+          id: row.id,
+          tenantId: row.tenantId,
+          definitionName: row.definitionName,
+          reason: DEPLOYMENT_GONE,
+        });
+        continue;
+      }
       // One schedule's failed delivery is its own: the tick still advances
       // every due row, so a permanently undeliverable schedule cannot block
       // the rest of the table or re-fire every minute forever.
       try {
         await deliver({
-          to: [row.toAddress],
+          to: [deployment.address],
           subject: row.subject,
           body: row.body,
           tenantId: row.tenantId,
@@ -96,12 +130,13 @@ export function createCronTicker<TSchema extends Record<string, unknown>>(
   opts: CreateCronTickerOpts<TSchema>,
 ): CronTicker {
   const onDeliveryError = opts.onDeliveryError ?? (() => undefined);
+  const onScheduleStopped = opts.onScheduleStopped ?? (() => undefined);
   let timer: ReturnType<typeof setInterval> | undefined;
   let inFlight: Promise<void> | undefined;
 
   const runTick = () => {
     if (inFlight !== undefined) return;
-    inFlight = tick(opts.db, opts.deliver, onDeliveryError).finally(() => {
+    inFlight = tick(opts.db, opts.deliver, onDeliveryError, onScheduleStopped).finally(() => {
       inFlight = undefined;
     });
   };

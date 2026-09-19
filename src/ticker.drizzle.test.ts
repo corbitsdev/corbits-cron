@@ -4,27 +4,17 @@
 // targets it.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { createDB, dropSchema, runMigrations, schema } from "@intx/db";
+import { createDB, dropSchema, runMigrations } from "@intx/db";
 import { eq } from "drizzle-orm";
 
 import { applyCronMigrations, cronScheduleTable } from "./schema";
 import { createCronTicker } from "./ticker";
+import { dbTargetFromUrl, seedDeployment, seedTenant, tenantDomainFor } from "./test-seed";
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIfDb = databaseUrl === undefined ? describe.skip : describe;
 
 const SCHEMA = "cron_ticker_test";
-
-function dbTargetFromUrl(url: string) {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname,
-    port: parsed.port ? Number(parsed.port) : 5432,
-    user: decodeURIComponent(parsed.username),
-    password: decodeURIComponent(parsed.password),
-    database: parsed.pathname.replace(/^\//, ""),
-  };
-}
 
 describeIfDb("createCronTicker", () => {
   const target = dbTargetFromUrl(databaseUrl ?? "postgres://localhost:5432/unused");
@@ -38,20 +28,12 @@ describeIfDb("createCronTicker", () => {
     await dropSchema(target, { schema: SCHEMA });
   });
 
-  async function seedTenant(db: Awaited<ReturnType<typeof createDB>>["db"], id: string) {
-    await db.insert(schema.tenant).values({
-      id,
-      name: id,
-      slug: id.replace(/_/g, "-"),
-      domain: `${id.replace(/_/g, "-")}.workbench.test`,
-    });
-  }
-
-  test("fires a due row once and leaves a not-yet-due row alone", async () => {
+  test("a due row is mailed at its deployment's current run address", async () => {
     const { db, close } = createDB({ ...target, schema: SCHEMA });
     try {
       const tenantId = `tnt_cron_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
+      const runId = await seedDeployment(db, tenantId, "agent-due-source");
 
       const dueId = `sched_due_${randomUUID().slice(0, 8)}`;
       const notDueId = `sched_not_due_${randomUUID().slice(0, 8)}`;
@@ -61,7 +43,7 @@ describeIfDb("createCronTicker", () => {
           id: dueId,
           tenantId,
           expression: "* * * * *",
-          toAddress: "ops@example.com",
+          definitionName: "agent-due-source",
           subject: "due",
           body: "fire me",
           createdAt: twoMinutesAgo,
@@ -70,26 +52,26 @@ describeIfDb("createCronTicker", () => {
           id: notDueId,
           tenantId,
           expression: "0 0 1 1 *",
-          toAddress: "ops@example.com",
+          definitionName: "agent-due-source",
           subject: "not due",
           body: "never yet",
           createdAt: twoMinutesAgo,
         },
       ]);
 
-      const delivered: string[] = [];
+      const delivered: Array<{ subject: string; to: string[] }> = [];
       const ticker = createCronTicker({
         db,
         intervalMs: 50,
         deliver: (message) => {
-          delivered.push(message.subject);
+          delivered.push({ subject: message.subject, to: message.to });
         },
       });
       ticker.start();
       await new Promise((resolve) => setTimeout(resolve, 200));
       ticker.stop();
 
-      expect(delivered).toEqual(["due"]);
+      expect(delivered).toEqual([{ subject: "due", to: [`${runId}@${tenantDomainFor(tenantId)}`] }]);
 
       const [firedRow] = await db
         .select()
@@ -101,19 +83,64 @@ describeIfDb("createCronTicker", () => {
     }
   });
 
+  test("a schedule whose deployment is gone stops instead of firing", async () => {
+    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    try {
+      const tenantId = `tnt_cron_gone_${randomUUID().slice(0, 8)}`;
+      await seedTenant(db, tenantId);
+      await seedDeployment(db, tenantId, "agent-gone-source", "completed");
+
+      const id = `sched_gone_${randomUUID().slice(0, 8)}`;
+      await db.insert(cronScheduleTable).values({
+        id,
+        tenantId,
+        expression: "* * * * *",
+        definitionName: "agent-gone-source",
+        subject: "orphan",
+        body: "nobody home",
+        createdAt: new Date(Date.now() - 2 * 60_000),
+      });
+
+      let fired = 0;
+      const stopped: string[] = [];
+      const ticker = createCronTicker({
+        db,
+        intervalMs: 20,
+        deliver: () => {
+          fired++;
+        },
+        onScheduleStopped: (schedule) => stopped.push(schedule.id),
+      });
+      ticker.start();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      ticker.stop();
+
+      expect(fired).toBe(0);
+      expect(stopped).toEqual([id]);
+
+      const [row] = await db.select().from(cronScheduleTable).where(eq(cronScheduleTable.id, id));
+      expect(row?.stoppedAt).not.toBeNull();
+      expect(row?.stoppedReason).toBe("deployment_gone");
+      expect(row?.lastFiredAt).toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
   test("SKIP LOCKED means two concurrent tickers never double-fire a row", async () => {
     const { db: dbA, close: closeA } = createDB({ ...target, schema: SCHEMA });
     const { db: dbB, close: closeB } = createDB({ ...target, schema: SCHEMA });
     try {
       const tenantId = `tnt_cron_race_${randomUUID().slice(0, 8)}`;
       await seedTenant(dbA, tenantId);
+      await seedDeployment(dbA, tenantId, "agent-race-source");
 
       const id = `sched_race_${randomUUID().slice(0, 8)}`;
       await dbA.insert(cronScheduleTable).values({
         id,
         tenantId,
         expression: "* * * * *",
-        toAddress: "ops@example.com",
+        definitionName: "agent-race-source",
         subject: "race",
         body: "fire once",
         createdAt: new Date(Date.now() - 2 * 60_000),
