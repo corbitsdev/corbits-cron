@@ -1,4 +1,4 @@
-// DB-gated: create validates its target against the live deployments the
+// DB-gated: create validates its target against the workflow definitions the
 // hub itself writes, so it needs a real database.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
@@ -34,12 +34,12 @@ describeIfDb("mountCron", () => {
     });
   }
 
-  test("a target with a live deployment is saved; one without is rejected", async () => {
+  test("a known agent is saved even with no live run; an unknown name is rejected", async () => {
     const { db, close } = createDB({ ...target, schema: SCHEMA });
     try {
       const tenantId = `tnt_cron_mnt_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
-      await seedDeployment(db, tenantId, "agent-live-source");
+      await seedDeployment(db, tenantId, "agent-live-source", "completed");
 
       const app = new Hono();
       mountCron(app, { db, requireTenantMember: () => true });
@@ -61,7 +61,7 @@ describeIfDb("mountCron", () => {
         body: "go",
       });
       expect(rejected.status).toBe(400);
-      expect(await rejected.json()).toEqual({ error: "no_live_deployment" });
+      expect(await rejected.json()).toEqual({ error: "unknown_definition" });
     } finally {
       await close();
     }
