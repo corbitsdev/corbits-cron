@@ -18,21 +18,18 @@ bun add @corbits/cron
 Apply migrations, then mount CRUD at `/api/tenants/:tenantId/cron` on the host app (never a sub-router under a prefix):
 
 ```ts
-import { Hono } from "hono";
 import { applyCronMigrations } from "@corbits/cron/migrations";
 import { mountCron } from "@corbits/cron";
 
 await applyCronMigrations(databaseUrl);
 
-const cronApp = new Hono();
-mountCron(cronApp, {
+mountCron(app, {
   db,
   requireTenantMember: (ctx, tenantId) => {
     const c = ctx as { get(key: "tenant"): { id: string } };
     return c.get("tenant").id === tenantId;
   },
 });
-app.route("/", cronApp);
 ```
 
 | Route | |
@@ -55,15 +52,7 @@ if (!isValidCronExpression("0 9 * * 1-5")) {
 createCronTicker({
   db,
   intervalMs: 60_000,
-  deliver: createRunTriggerCronDeliver(
-    createRunTriggerDeliverer({
-      router,
-      materialize,
-      tenantDomain,
-      senderLocalPart: "cron",
-      systemSender: createTenantSystemSender({ db, principalKeyStore }),
-    }),
-  ),
+  deliver: createRunTriggerCronDeliver(deliverer),
 }).start();
 ```
 
