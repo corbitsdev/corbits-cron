@@ -1,136 +1,114 @@
 # @corbits/cron
 
-Cron schedules for an Interchange hub. A tenant saves a cron expression, the
-agent to wake, and the mail to send it (`subject` / `body`);
-`createCronTicker` polls for due schedules and hands each to the host's own
-transport, so a schedule-triggered workflow is just a `mail`-triggered one
-addressed at itself.
+Cron schedules for an Interchange hub. A tenant saves a cron expression, the agent to wake, and the mail to send it (`subject` / `body`). `createCronTicker` polls for due rows and hands each to the host's transport, so a schedule-triggered workflow is a `mail`-triggered one addressed at itself.
 
-## The schedule contract
+## Runtime support
 
-A schedule targets an agent's **live deployment**, named by its workflow
-definition's name (the name of the `workflow`-kind asset its source lives
-in) — stable across redeploys, unlike a run address or a definition id. At
-fire time the ticker resolves that name to the tenant's newest live anchor
-run and mails `<run id>@<tenant domain>`, so a schedule keeps working after
-a hub restart or a redeploy hands the agent a new run. An agent that exists
-but has no live run right now is a gap, not an ending: the tick skips, marks
-`waiting_since` and reports it once through `onScheduleWaiting`, and the
-first tick that finds a live run again delivers and clears the marker. Only
-a deleted agent — no workflow definition of that name left in the tenant —
-stops the schedule (`stopped_at` plus `stopped_reason: "agent_deleted"`,
-reported once through `onScheduleStopped`); a stopped schedule never fires
-again. Creating a schedule is rejected only for a name no agent carries. The vendored Interchange workflow-trigger grammar has no native
-`schedule` trigger — this package is the bridge, not a fork of it.
+The published export is TypeScript source (`./src/index.ts`); Bun consumes it directly. Native Node does not load this extensionless TypeScript source as-is.
 
-## Install
+## Quickstart
 
-```
+```sh
+npm add @corbits/cron
+pnpm add @corbits/cron
+yarn add @corbits/cron
 bun add @corbits/cron
 ```
 
-## Mount (`mountCron`)
-
-CRUD at `/api/tenants/:tenantId/cron`, registered directly on the host's
-app (never a sub-router under a prefix):
+At boot, alongside the rest of the hub's own migrations, apply this package's migration against the hub's database and schema:
 
 ```ts
-const cronApp = new Hono<TenantEnv>();
-mountCron(cronApp, {
-  db,
-  requireTenantMember: (ctx, tenantId) => {
-    const c = ctx as { get(key: "tenant"): { id: string } };
-    return c.get("tenant").id === tenantId;
-  },
-});
-app.route("/", cronApp);
+await applyCronMigrations(databaseUrl, { tenantSchema });
 ```
+
+Mounting is `mountCron(app, opts)` (schedule CRUD, at `/api/tenants/:tenantId/cron`) plus `createCronTicker(opts)` (the poller that turns a due row into mail) started together, on the hub's existing `db`. The function below is complete and mounts both:
+
+```ts
+import type { Hono } from "hono";
+import {
+  createCronTicker,
+  createRunTriggerCronDeliver,
+  mountCron,
+  type CronDb,
+  type CronTicker,
+  type RunTriggerDeliverer,
+} from "@corbits/cron";
+
+/**
+ * Mounts schedule CRUD and starts the ticker on the host's own db.
+ * `deliverer` is usually built from `@corbits/webhooks`'s
+ * `createRunTriggerDeliverer` + `createTenantSystemSender` — the same
+ * system-trigger deliverer a host already has wired up for webhooks.
+ */
+export function installCron(
+  app: Hono,
+  db: CronDb,
+  deliverer: RunTriggerDeliverer,
+  onError?: (error: unknown) => void,
+): CronTicker {
+  mountCron(app, {
+    db,
+    requireTenantMember: (ctx, tenantId) => {
+      const c = ctx as { get(key: "tenant"): { id: string } };
+      return c.get("tenant").id === tenantId;
+    },
+  });
+
+  const ticker = createCronTicker({
+    db,
+    intervalMs: 60_000,
+    deliver: createRunTriggerCronDeliver(deliverer),
+    onDeliveryError: (error, schedule) => {
+      if (onError) onError(error);
+      else console.error("cron delivery failed", schedule.id, error);
+    },
+    onScheduleWaiting: (schedule) => {
+      console.log("cron schedule waiting for its agent", schedule.id, schedule.definitionName);
+    },
+    onScheduleStopped: (schedule) => {
+      const error = new Error(`cron schedule stopped: ${schedule.reason} (${schedule.definitionName})`);
+      if (onError) onError(error);
+      else console.error(error);
+    },
+  });
+  ticker.start();
+  return ticker;
+}
+```
+
+| Param | Type | What the host provides |
+| --- | --- | --- |
+| `app` | `Hono` | Schedule CRUD is mounted on it at `/api/tenants/:tenantId/cron`. |
+| `db` | `CronDb` | The hub's existing drizzle handle — the same one `applyCronMigrations` migrated into. |
+| `deliverer` | `RunTriggerDeliverer` | Turns a due schedule's recipient into mail; `createRunTriggerCronDeliver` adapts it to the ticker's `DeliverCronMail` shape. |
+| `onError` | `(error: unknown) => void` (optional) | Told about a failed delivery or a schedule that stopped, so the host can report it; defaults to `console.error`. |
+
+`installCron` returns the `CronTicker` so the host can `.stop()` it on shutdown.
+
+The inline `requireTenantMember` reads the tenant the host's own tenant middleware already placed on the request context — it relies on that middleware having already authorized the request, not on any check of its own.
 
 | Route | |
 |---|---|
 | `GET /api/tenants/:tenantId/cron` | List the tenant's schedules |
-| `POST /api/tenants/:tenantId/cron` | Create a schedule (`expression`, `definitionName`, `subject`, `body`); 400 `unknown_definition` when no agent carries that name |
+| `POST /api/tenants/:tenantId/cron` | Create (`expression`, `definitionName`, `subject`, `body`); 400 `unknown_definition` when no agent carries that name |
 | `DELETE /api/tenants/:tenantId/cron/:id` | Remove a schedule |
 
-## Ticker (`createCronTicker`)
+## How it works
 
-```ts
-createCronTicker({
-  db,
-  intervalMs: 60_000,
-  deliver: (message) =>
-    lookups.persistMail({
-      senderAddress: message.from,
-      recipients: message.to,
-      raw: buildRawMessage(message),
-    }),
-}).start();
+A schedule targets a live deployment by workflow definition name — stable across redeploys. At fire time the ticker mails `<run id>@<tenant domain>`. A schedule whose agent has no live run waits (`waiting_since`); a schedule whose agent was deleted stops. Ticks claim due rows with `SELECT ... FOR UPDATE SKIP LOCKED`. A missed window fires once for the most recent due minute. Unroutable run triggers (`run_grants_not_routable` / `run_mail_not_routable`) fail a stale `running` anchor whose allocation already settled.
+
+## Development
+
+```sh
+git clone https://github.com/corbitsdev/corbits-cron.git
+cd corbits-cron
+bun install
+bun run typecheck
+bun run test
 ```
 
-Each tick claims due rows with `SELECT ... FOR UPDATE SKIP LOCKED`, so two
-tickers racing the same table split the due rows rather than double-fire
-any of them, and a schedule that missed several ticks fires once for the
-most recent due minute, never once per missed tick. A schedule's failed
-delivery is reported through `onDeliveryError` and never blocks the rest of
-the table. When the deliverer rejects with an unroutable run trigger (`code`
-`run_grants_not_routable` / `run_mail_not_routable`, carrying the dead run's
-`address` and `runId` — the contract `createRunTriggerDeliverer` owns), the
-ticker additionally fails that anchor run when its sidecar can never come
-back (its allocation already settled `released` or `failed`): a previous
-stack's death leaves a `running` anchor with a dead address behind, and
-failing it turns per-tick noise into one real failure after which the
-schedule waits for the agent to come back. An unroutable run whose
-allocation is still active is left alone — its sidecar may just be
-reconnecting.
-
-## Deliverer adapter (`createRunTriggerCronDeliver`)
-
-Structurally compatible with `@corbits/webhooks`'s `createRunTriggerDeliverer`,
-so a host can point a cron ticker at the same system-trigger deliverer it
-already built for webhooks:
-
-```ts
-createCronTicker({
-  db,
-  intervalMs: 60_000,
-  deliver: createRunTriggerCronDeliver(
-    createRunTriggerDeliverer({
-      router,
-      materialize,
-      tenantDomain,
-      senderLocalPart: "cron",
-      systemSender: createTenantSystemSender({ db, principalKeyStore }),
-    }),
-  ),
-}).start();
-```
-
-## Schema / migrations
-
-One table, on its own Postgres schema (`cron.schedule`), FK'd back to
-Interchange's `tenant` table:
-
-| Column | |
-|---|---|
-| `id` | primary key |
-| `tenant_id` | FK → `tenant.id`, cascades on delete |
-| `expression` | 5-field cron string |
-| `definition_name` | the targeted agent's workflow definition name |
-| `subject`, `body` | mail content |
-| `last_fired_at` | last tick this schedule fired |
-| `waiting_since` | set while the agent has no live run; cleared on the next delivery |
-| `stopped_at`, `stopped_reason` | set when the targeted agent is deleted; a stopped schedule never fires again |
-| `created_at` | a fresh schedule is due at its first matching minute after this, never retroactively |
-
-Applied idempotently, inside one advisory-locked transaction so concurrent
-hub replicas cannot race the same DDL:
-
-```ts
-import { applyCronMigrations } from "@corbits/cron/migrations";
-
-await applyCronMigrations(databaseUrl);
-```
+`bun run test` is `bun test ./src`.
 
 ## License
 
-LGPL-2.1
+LGPL-2.1-only.
