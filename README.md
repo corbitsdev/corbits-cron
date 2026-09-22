@@ -19,21 +19,23 @@ bun add @corbits/cron
 
 | `opts` | Type | What the host provides |
 | --- | --- | --- |
-| `db` | `CronDb` | The host's existing drizzle/Postgres handle. Schedules are stored there. |
+| `db` | `CronDb` | Schedules are stored there. `createDB` (from `@intx/db`) opens a handle; a hub that already has one passes it as `db` instead. |
 | `requireTenantMember` | `(ctx: unknown, tenantId: string) => boolean` | Membership check for the tenant. Return `true` when the caller may manage that tenant's schedules. |
 
+The program below is complete: it runs the migrations, opens a handle with `createDB`, and mounts the scheduler on a fresh Hono app. A hub that already has a `CronDb` passes it as `db` instead. Point `DATABASE_URL` at the hub database the cron tables were migrated into.
+
 ```ts
-import { applyCronMigrations } from "@corbits/cron/migrations";
-import { mountCron, type CronDb } from "@corbits/cron";
-import type { Hono } from "hono";
+import { createDB } from "@intx/db";
+import { applyCronMigrations, mountCron } from "@corbits/cron";
+import { Hono } from "hono";
 
-// Host-owned: the hub's Hono app, drizzle/Postgres handle, and connection string.
-declare const app: Hono;
-declare const db: CronDb;
-declare const databaseUrl: string;
+const DATABASE_URL = "postgres://localhost/cron";
 
-await applyCronMigrations(databaseUrl);
+await applyCronMigrations(DATABASE_URL);
 
+const { db } = createDB({ connectionString: DATABASE_URL, schema: "cron" });
+
+const app = new Hono();
 mountCron(app, {
   db,
   requireTenantMember: (ctx, tenantId) => {
@@ -41,7 +43,11 @@ mountCron(app, {
     return c.get("tenant").id === tenantId;
   },
 });
+
+export default app;
 ```
+
+The inline `requireTenantMember` reads the tenant the host middleware already placed on the request context. It lets any caller manage the matching tenant here — a real hub replaces the body with its own membership check before exposing this beyond local development.
 
 | Route | |
 |---|---|
@@ -60,31 +66,7 @@ mountCron(app, {
 | `onScheduleStopped` | `(schedule) => void` (optional) | Told once when a schedule stops because the agent it targets was deleted. |
 | `onScheduleWaiting` | `(schedule) => void` (optional) | Told once each time a schedule starts waiting for its agent's next run. |
 
-```ts
-import {
-  createCronTicker,
-  createRunTriggerCronDeliver,
-  isValidCronExpression,
-  type CronDb,
-  type RunTriggerDeliverer,
-} from "@corbits/cron";
-
-// Host-owned: the hub's drizzle/Postgres handle and a run-trigger deliverer
-// (e.g. the MailDeliverer built for webhooks — this adapter's
-// RunTriggerDeliverer shape matches it structurally, so no new dependency).
-declare const db: CronDb;
-declare const deliverer: RunTriggerDeliverer;
-
-if (!isValidCronExpression("0 9 * * 1-5")) {
-  throw new Error("invalid expression");
-}
-
-createCronTicker({
-  db,
-  intervalMs: 60_000,
-  deliver: createRunTriggerCronDeliver(deliverer),
-}).start();
-```
+A host wires it with the same `db` handle and a `deliver` function; `createRunTriggerCronDeliver` adapts an existing run-trigger deliverer to the `{ to, subject, body, tenantId }` shape.
 
 `createRunTriggerCronDeliver` is structurally compatible with `@corbits/webhooks`'s `createRunTriggerDeliverer`, so a host can point cron at the same system-trigger deliverer it built for webhooks.
 
