@@ -94,7 +94,6 @@ export async function seedAllocation(
     provisionerId: "prov_test",
     provisionerApiVersion: 1,
     provisionerBindingFingerprint: "fp_test",
-    placementSharing: "exclusive",
     status,
   });
 }
