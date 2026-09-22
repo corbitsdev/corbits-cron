@@ -24,7 +24,13 @@ bun add @corbits/cron
 
 ```ts
 import { applyCronMigrations } from "@corbits/cron/migrations";
-import { mountCron } from "@corbits/cron";
+import { mountCron, type CronDb } from "@corbits/cron";
+import type { Hono } from "hono";
+
+// Host-owned: the hub's Hono app, drizzle/Postgres handle, and connection string.
+declare const app: Hono;
+declare const db: CronDb;
+declare const databaseUrl: string;
 
 await applyCronMigrations(databaseUrl);
 
@@ -59,7 +65,15 @@ import {
   createCronTicker,
   createRunTriggerCronDeliver,
   isValidCronExpression,
+  type CronDb,
+  type RunTriggerDeliverer,
 } from "@corbits/cron";
+
+// Host-owned: the hub's drizzle/Postgres handle and a run-trigger deliverer
+// (e.g. the MailDeliverer built for webhooks — this adapter's
+// RunTriggerDeliverer shape matches it structurally, so no new dependency).
+declare const db: CronDb;
+declare const deliverer: RunTriggerDeliverer;
 
 if (!isValidCronExpression("0 9 * * 1-5")) {
   throw new Error("invalid expression");
