@@ -19,21 +19,28 @@ bun add @corbits/cron
 
 | `opts` | Type | What the host provides |
 | --- | --- | --- |
-| `db` | `CronDb` | Schedules are stored there. `createDB` (from `@intx/db`) opens a handle; a hub that already has one passes it as `db` instead. |
+| `db` | `CronDb` | Schedules are stored there. `createDB` (from `@intx/db`) opens a handle from a `{ host, port, user, password, database }` config; a hub that already has one passes it as `db` instead. |
 | `requireTenantMember` | `(ctx: unknown, tenantId: string) => boolean` | Membership check for the tenant. Return `true` when the caller may manage that tenant's schedules. |
 
-The program below is complete: it runs the migrations, opens a handle with `createDB`, and mounts the scheduler on a fresh Hono app. A hub that already has a `CronDb` passes it as `db` instead. Point `DATABASE_URL` at the hub database the cron tables were migrated into.
+The program below is complete: it builds the same `host`/`port` config `createDB` and `applyCronMigrations` both need, runs the migration, opens a handle, and mounts the scheduler on a fresh Hono app. A hub that already has a `CronDb` passes it as `db` instead and skips `createDB` here.
 
 ```ts
 import { createDB } from "@intx/db";
 import { applyCronMigrations, mountCron } from "@corbits/cron";
 import { Hono } from "hono";
 
-const DATABASE_URL = "postgres://localhost/cron";
+const dbConfig = {
+  host: process.env["DB_HOST"] ?? "localhost",
+  port: Number(process.env["DB_PORT"] ?? 5432),
+  user: process.env["DB_USER"] ?? "postgres",
+  password: process.env["DB_PASSWORD"] ?? "postgres",
+  database: process.env["DB_NAME"] ?? "interchange",
+};
+const databaseUrl = `postgres://${dbConfig.user}:${dbConfig.password}@${dbConfig.host}:${String(dbConfig.port)}/${dbConfig.database}`;
 
-await applyCronMigrations(DATABASE_URL);
+await applyCronMigrations(databaseUrl, { tenantSchema: "public" });
 
-const { db } = createDB({ connectionString: DATABASE_URL, schema: "cron" });
+const { db } = createDB(dbConfig);
 
 const app = new Hono();
 mountCron(app, {
