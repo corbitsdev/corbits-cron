@@ -15,67 +15,83 @@ yarn add @corbits/cron
 bun add @corbits/cron
 ```
 
-`mountCron(app, opts)` registers schedule CRUD directly on the host app at `/api/tenants/:tenantId/cron`. Every field of `opts` is a host responsibility:
-
-| `opts` | Type | What the host provides |
-| --- | --- | --- |
-| `db` | `CronDb` | Schedules are stored there. `createDB` (from `@intx/db`) opens a handle from a `{ host, port, user, password, database }` config; a hub that already has one passes it as `db` instead. |
-| `requireTenantMember` | `(ctx: unknown, tenantId: string) => boolean` | Membership check for the tenant. Return `true` when the caller may manage that tenant's schedules. |
-
-The program below is complete: it builds the same `host`/`port` config `createDB` and `applyCronMigrations` both need, runs the migration, opens a handle, and mounts the scheduler on a fresh Hono app. A hub that already has a `CronDb` passes it as `db` instead and skips `createDB` here.
+At boot, alongside the rest of the hub's own migrations, apply this package's migration against the hub's database and schema:
 
 ```ts
-import { createDB } from "@intx/db";
-import { applyCronMigrations, mountCron } from "@corbits/cron";
-import { Hono } from "hono";
-
-const dbConfig = {
-  host: process.env["DB_HOST"] ?? "localhost",
-  port: Number(process.env["DB_PORT"] ?? 5432),
-  user: process.env["DB_USER"] ?? "postgres",
-  password: process.env["DB_PASSWORD"] ?? "postgres",
-  database: process.env["DB_NAME"] ?? "interchange",
-};
-const databaseUrl = `postgres://${dbConfig.user}:${dbConfig.password}@${dbConfig.host}:${String(dbConfig.port)}/${dbConfig.database}`;
-
-await applyCronMigrations(databaseUrl, { tenantSchema: "public" });
-
-const { db } = createDB(dbConfig);
-
-const app = new Hono();
-mountCron(app, {
-  db,
-  requireTenantMember: (ctx, tenantId) => {
-    const c = ctx as { get(key: "tenant"): { id: string } };
-    return c.get("tenant").id === tenantId;
-  },
-});
-
-export default app;
+await applyCronMigrations(databaseUrl, { tenantSchema });
 ```
 
-The inline `requireTenantMember` reads the tenant the host middleware already placed on the request context. It lets any caller manage the matching tenant here — a real hub replaces the body with its own membership check before exposing this beyond local development.
+Mounting is `mountCron(app, opts)` (schedule CRUD, at `/api/tenants/:tenantId/cron`) plus `createCronTicker(opts)` (the poller that turns a due row into mail) started together, on the hub's existing `db`. The function below is complete and mounts both:
+
+```ts
+import type { Hono } from "hono";
+import {
+  createCronTicker,
+  createRunTriggerCronDeliver,
+  mountCron,
+  type CronDb,
+  type CronTicker,
+  type RunTriggerDeliverer,
+} from "@corbits/cron";
+
+/**
+ * Mounts schedule CRUD and starts the ticker on the host's own db.
+ * `deliverer` is usually built from `@corbits/webhooks`'s
+ * `createRunTriggerDeliverer` + `createTenantSystemSender` — the same
+ * system-trigger deliverer a host already has wired up for webhooks.
+ */
+export function installCron(
+  app: Hono,
+  db: CronDb,
+  deliverer: RunTriggerDeliverer,
+  onError?: (error: unknown) => void,
+): CronTicker {
+  mountCron(app, {
+    db,
+    requireTenantMember: (ctx, tenantId) => {
+      const c = ctx as { get(key: "tenant"): { id: string } };
+      return c.get("tenant").id === tenantId;
+    },
+  });
+
+  const ticker = createCronTicker({
+    db,
+    intervalMs: 60_000,
+    deliver: createRunTriggerCronDeliver(deliverer),
+    onDeliveryError: (error, schedule) => {
+      if (onError) onError(error);
+      else console.error("cron delivery failed", schedule.id, error);
+    },
+    onScheduleWaiting: (schedule) => {
+      console.log("cron schedule waiting for its agent", schedule.id, schedule.definitionName);
+    },
+    onScheduleStopped: (schedule) => {
+      const error = new Error(`cron schedule stopped: ${schedule.reason} (${schedule.definitionName})`);
+      if (onError) onError(error);
+      else console.error(error);
+    },
+  });
+  ticker.start();
+  return ticker;
+}
+```
+
+| Param | Type | What the host provides |
+| --- | --- | --- |
+| `app` | `Hono` | Schedule CRUD is mounted on it at `/api/tenants/:tenantId/cron`. |
+| `db` | `CronDb` | The hub's existing drizzle handle — the same one `applyCronMigrations` migrated into. |
+| `deliverer` | `RunTriggerDeliverer` | Turns a due schedule's recipient into mail; `createRunTriggerCronDeliver` adapts it to the ticker's `DeliverCronMail` shape. |
+| `onError` | `(error: unknown) => void` (optional) | Told about a failed delivery or a schedule that stopped, so the host can report it; defaults to `console.error`. |
+
+`installCron` returns the `CronTicker` so the host can `.stop()` it on shutdown.
+
+The inline `requireTenantMember` reads the tenant the host's own tenant middleware already placed on the request context — it relies on that middleware having already authorized the request, not on any check of its own.
 
 | Route | |
 |---|---|
 | `GET /api/tenants/:tenantId/cron` | List the tenant's schedules |
 | `POST /api/tenants/:tenantId/cron` | Create (`expression`, `definitionName`, `subject`, `body`); 400 `unknown_definition` when no agent carries that name |
 | `DELETE /api/tenants/:tenantId/cron/:id` | Remove a schedule |
-
-`createCronTicker(opts)` turns due rows into mail through the host's delivery function:
-
-| `opts` | Type | What the host provides |
-| --- | --- | --- |
-| `db` | `CronDb` | The host's existing drizzle/Postgres handle. |
-| `deliver` | `DeliverCronMail` | Called with `{ to, subject, body, tenantId }` for each due schedule. `createRunTriggerCronDeliver` adapts a run-trigger deliverer to this shape. |
-| `intervalMs` | `number` | Poll interval, for example `60_000`. |
-| `onDeliveryError` | `(error, schedule) => void` (optional) | Told about a delivery that failed, so the host can report it. |
-| `onScheduleStopped` | `(schedule) => void` (optional) | Told once when a schedule stops because the agent it targets was deleted. |
-| `onScheduleWaiting` | `(schedule) => void` (optional) | Told once each time a schedule starts waiting for its agent's next run. |
-
-A host wires it with the same `db` handle and a `deliver` function; `createRunTriggerCronDeliver` adapts an existing run-trigger deliverer to the `{ to, subject, body, tenantId }` shape.
-
-`createRunTriggerCronDeliver` is structurally compatible with `@corbits/webhooks`'s `createRunTriggerDeliverer`, so a host can point cron at the same system-trigger deliverer it built for webhooks.
 
 ## How it works
 
