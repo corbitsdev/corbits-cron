@@ -5,10 +5,10 @@ import { type } from "arktype";
 import { eq, and } from "drizzle-orm";
 import type { Env, Hono } from "hono";
 
-import { isValidCronExpression } from "./cron";
-import { definitionExists } from "./deployment";
-import { cronScheduleTable } from "./schema";
-import type { CronDb } from "./ticker";
+import { isValidCronExpression } from "./cron.js";
+import { definitionExists } from "./deployment.js";
+import { cronScheduleTable } from "./schema.js";
+import type { CronDb } from "./ticker.js";
 
 export type RequireTenantMember = (ctx: unknown, tenantId: string) => Promise<boolean> | boolean;
 

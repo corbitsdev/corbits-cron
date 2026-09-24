@@ -1,1 +1,1 @@
-export { applyCronMigrations } from "./schema";
+export { applyCronMigrations } from "./schema.js";

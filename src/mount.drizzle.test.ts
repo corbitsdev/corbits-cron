@@ -5,9 +5,9 @@ import { randomUUID } from "node:crypto";
 import { createDB, dropSchema, runMigrations } from "@intx/db";
 import { Hono } from "hono";
 
-import { mountCron } from "./mount";
-import { applyCronMigrations } from "./schema";
-import { dbTargetFromUrl, seedDeployment, seedTenant } from "./test-seed";
+import { mountCron } from "./mount.js";
+import { applyCronMigrations } from "./schema.js";
+import { dbTargetFromUrl, seedDeployment, seedTenant } from "./test-seed.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIfDb = databaseUrl === undefined ? describe.skip : describe;

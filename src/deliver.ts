@@ -1,4 +1,4 @@
-import type { DeliverCronMail } from "./ticker";
+import type { DeliverCronMail } from "./ticker.js";
 
 /** A system-trigger deliverer, shaped like `@corbits/webhooks`'s
  * `MailDeliverer`. Structural so this package stays free of it. */
