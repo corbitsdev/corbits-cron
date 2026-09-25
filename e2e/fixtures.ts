@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { schema } from "@intx/db";
 import { and, eq } from "drizzle-orm";
 
-import type { TestDb } from "./db-harness.js";
+import type { TestDb } from "./helpers.js";
 
 export function tenantDomainFor(id: string): string {
   return `${id.replace(/_/g, "-")}.workbench.test`;

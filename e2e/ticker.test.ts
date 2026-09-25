@@ -7,7 +7,7 @@ import { cronScheduleTable } from "../src/schema.js";
 import { createCronTicker } from "../src/ticker.js";
 import { createRunTriggerCronDeliver, type RunTriggerDeliverer } from "../src/deliver.js";
 import { RUN_GRANTS_NOT_ROUTABLE } from "../src/deployment.js";
-import { createTestDatabase, describeIfDb, type TestDatabase } from "./lib/db-harness.js";
+import { createTestDatabase, describeIfDb, type TestDatabase } from "./helpers.js";
 import {
   deleteDefinition,
   seedAllocation,
@@ -15,7 +15,7 @@ import {
   seedLiveRun,
   seedTenant,
   tenantDomainFor,
-} from "./lib/seed.js";
+} from "./fixtures.js";
 
 describeIfDb("createCronTicker", () => {
   let database: TestDatabase | undefined;

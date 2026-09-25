@@ -12,8 +12,8 @@ import {
   cronRoutesApp,
   describeIfDb,
   type TestDatabase,
-} from "./lib/db-harness.js";
-import { seedDeployment, seedTenant } from "./lib/seed.js";
+} from "./helpers.js";
+import { seedDeployment, seedTenant } from "./fixtures.js";
 
 const tenantId = "tnt_cron_v010";
 const scheduleId = "sched_v010";
