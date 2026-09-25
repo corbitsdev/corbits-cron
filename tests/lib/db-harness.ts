@@ -28,7 +28,11 @@ function adminClient(url: string) {
   return postgres(url, { max: 1, onnotice: () => undefined });
 }
 
-export async function createTestDatabase(): Promise<TestDatabase> {
+/** `beforeCron` runs after the host migrations and before this version's
+ * `runCronMigrations`, to lay down an older release's schema and rows. */
+export async function createTestDatabase(
+  beforeCron?: (config: DBConfig) => Promise<void>,
+): Promise<TestDatabase> {
   if (databaseUrl === undefined) throw new Error("createTestDatabase: DATABASE_URL is unset");
   const name = `cron_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const admin = adminClient(databaseUrl);
@@ -55,6 +59,7 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   };
   try {
     await runMigrations(config, { schema: "public" });
+    await beforeCron?.(config);
     await runCronMigrations(config, { schema: "public" });
   } catch (error) {
     await drop();

@@ -50,6 +50,7 @@
     "postgres": "^3.4.9"
   },
   "devDependencies": {
+    "@corbits/cron-0.1.0": "npm:@corbits/cron@0.1.0",
     "@intx/db": "0.4.0",
     "@intx/hub-api": "0.4.0",
     "@types/bun": "1.3.9",
