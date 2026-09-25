@@ -10,8 +10,8 @@ import type { RequireGrant, TenantEnv } from "@intx/hub-api";
 import { Hono } from "hono";
 import postgres from "postgres";
 
-import { runCronMigrations } from "../../src/migrations.js";
-import { createCronRoutes } from "../../src/routes.js";
+import { runCronMigrations } from "../src/migrations.js";
+import { createCronRoutes } from "../src/routes.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 

@@ -11,8 +11,8 @@ import {
   cronRoutesApp,
   describeIfDb,
   type TestDatabase,
-} from "./lib/db-harness.js";
-import { seedDeployment, seedTenant } from "./lib/seed.js";
+} from "./helpers.js";
+import { seedDeployment, seedTenant } from "./fixtures.js";
 
 describeIfDb("createCronRoutes", () => {
   let database: TestDatabase | undefined;

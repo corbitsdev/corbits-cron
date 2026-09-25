@@ -8,10 +8,11 @@ cd corbits-cron
 bun install
 bun run build
 bun run typecheck
-DATABASE_URL=postgres://localhost:5432/postgres bun run test
+bun run test
+DATABASE_URL=postgres://localhost:5432/postgres bun run test:e2e
 ```
 
-The `tests/` suites create and drop one database per suite, so `DATABASE_URL` needs a Postgres 13+ role with `CREATEDB`. They skip when `DATABASE_URL` is unset. `tests/upgrade-from-0.1.0.test.ts` migrates and writes with the published 0.1.0 package, then upgrades in place.
+The `e2e/` suites create and drop one database per suite, so `DATABASE_URL` needs a Postgres 13+ role with `CREATEDB`. They skip when `DATABASE_URL` is unset. `e2e/upgrade-from-0.1.0.test.ts` migrates and writes with the published 0.1.0 package, then upgrades in place.
 
 ## Migrations
 
@@ -24,3 +25,10 @@ A tenant saves a cron expression, the agent to wake, and the mail to send it (`s
 Ticks claim due rows with `SELECT ... FOR UPDATE SKIP LOCKED`, so concurrent tickers never deliver one row twice.
 
 Unroutable run triggers (`run_grants_not_routable` / `run_mail_not_routable`) fail a stale `running` anchor whose allocation already settled, so the next tick waits instead of retrying a dead address.
+
+## Commit messages
+
+Commit subjects and PR titles follow [Conventional Commits](https://www.conventionalcommits.org): `feat`, `fix`, `refactor`, `test`, `docs`, `build`, `ci`, `perf`, and `chore(release): x.y.z` for releases.
+Add `!` only for public API breaks: removed or renamed exports, changed signatures, newly required params. Peer and dependency range changes are `build(deps):` with no `!`.
+Keep subjects imperative, lowercase after the colon, 72 characters or less, and free of ticket IDs.
+Every PR links its issue with a `Closes <issue id>` line in the PR body.
