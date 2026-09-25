@@ -18,7 +18,7 @@
       "default": "./dist/migrations.js"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "migrations", "README.md", "LICENSE"],
   "publishConfig": {
     "access": "public"
   },

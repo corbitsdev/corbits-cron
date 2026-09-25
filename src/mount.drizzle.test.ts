@@ -6,7 +6,7 @@ import { createDB, dropSchema, runMigrations } from "@intx/db";
 import { Hono } from "hono";
 
 import { mountCron } from "./mount.js";
-import { applyCronMigrations } from "./schema.js";
+import { runCronMigrations } from "./migrations.js";
 import { dbTargetFromUrl, seedDeployment, seedTenant } from "./test-seed.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -19,7 +19,7 @@ describeIfDb("mountCron", () => {
 
   beforeAll(async () => {
     await runMigrations(target, { schema: SCHEMA });
-    await applyCronMigrations(databaseUrl ?? "", { tenantSchema: SCHEMA });
+    await runCronMigrations(target, { schema: SCHEMA });
   });
 
   afterAll(async () => {
