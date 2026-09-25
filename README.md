@@ -18,14 +18,15 @@ await runMigrations(config, { schema: "public" });
 await runCronMigrations(config, { schema: "public" });
 ```
 
-Mounting is `mountCron(app, opts)` (schedule CRUD, at `/api/tenants/:tenantId/cron`) plus `createCronTicker(opts)` (the poller that turns a due row into mail) started together, on the hub's existing `db`. The function below is complete and mounts both:
+Mounting is `createCronRoutes(deps)` (schedule CRUD, routed under the host's tenant app) plus `createCronTicker(opts)` (the poller that turns a due row into mail) started together, on the hub's existing `db`. The function below is complete and mounts both:
 
 ```ts
+import type { RequireGrant, TenantEnv } from "@intx/hub-api";
 import type { Hono } from "hono";
 import {
+  createCronRoutes,
   createCronTicker,
   createRunTriggerCronDeliver,
-  mountCron,
   type CronDb,
   type CronTicker,
   type RunTriggerDeliverer,
@@ -38,18 +39,13 @@ import {
  * system-trigger deliverer a host already has wired up for webhooks.
  */
 export function installCron(
-  app: Hono,
+  tenantApp: Hono<TenantEnv>,
   db: CronDb,
+  requireGrant: RequireGrant,
   deliverer: RunTriggerDeliverer,
   onError?: (error: unknown) => void,
 ): CronTicker {
-  mountCron(app, {
-    db,
-    requireTenantMember: (ctx, tenantId) => {
-      const c = ctx as { get(key: "tenant"): { id: string } };
-      return c.get("tenant").id === tenantId;
-    },
-  });
+  tenantApp.route("/cron", createCronRoutes({ db, requireGrant }));
 
   const ticker = createCronTicker({
     db,
@@ -74,20 +70,19 @@ export function installCron(
 
 | Param | Type | What the host provides |
 | --- | --- | --- |
-| `app` | `Hono` | Schedule CRUD is mounted on it at `/api/tenants/:tenantId/cron`. |
+| `tenantApp` | `Hono<TenantEnv>` | The host's tenant-scoped app, whose middleware already placed `tenant` and `principal` on the context; schedule CRUD is mounted on it at `/cron`. |
 | `db` | `CronDb` | The hub's existing drizzle handle — the same one `runCronMigrations` migrated into. |
+| `requireGrant` | `RequireGrant` | The host's Interchange `createRequireGrant` result; every route is gated on a `cron-schedule` grant. |
 | `deliverer` | `RunTriggerDeliverer` | Turns a due schedule's recipient into mail; `createRunTriggerCronDeliver` adapts it to the ticker's `DeliverCronMail` shape. |
 | `onError` | `(error: unknown) => void` (optional) | Told about a failed delivery or a schedule that stopped, so the host can report it; defaults to `console.error`. |
 
 `installCron` returns the `CronTicker` so the host can `.stop()` it on shutdown.
 
-The inline `requireTenantMember` reads the tenant the host's own tenant middleware already placed on the request context — it relies on that middleware having already authorized the request, not on any check of its own.
-
-| Route | |
-|---|---|
-| `GET /api/tenants/:tenantId/cron` | List the tenant's schedules |
-| `POST /api/tenants/:tenantId/cron` | Create (`expression`, `definitionName`, `subject`, `body`); 400 `unknown_definition` when no agent carries that name |
-| `DELETE /api/tenants/:tenantId/cron/:id` | Remove a schedule |
+| Route | Grant | |
+|---|---|---|
+| `GET /cron` | `cron-schedule:*` `read` | List the tenant's schedules |
+| `POST /cron` | `cron-schedule:*` `create` | Create (`expression`, `definitionName`, `subject`, `body`); 400 `unknown_definition` when no agent carries that name |
+| `DELETE /cron/:id` | `cron-schedule:<id>` `manage` | Remove a schedule |
 
 ## How it works
 

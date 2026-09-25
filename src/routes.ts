@@ -1,20 +1,20 @@
-// CRUD over a tenant's saved cron schedules. Absolute routes registered
-// directly on the host's app, never a sub-router under a prefix.
+// CRUD over a tenant's saved cron schedules, as a sub-app the host mounts
+// under its tenant prefix. The acting tenant comes from the host's context,
+// never from a path parameter.
 import { randomUUID } from "node:crypto";
 import { type } from "arktype";
 import { eq, and } from "drizzle-orm";
-import type { Env, Hono } from "hono";
+import { Hono } from "hono";
+import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
 
 import { isValidCronExpression } from "./cron.js";
 import { definitionExists } from "./deployment.js";
 import { cronScheduleTable } from "./schema.js";
 import type { CronDb } from "./ticker.js";
 
-export type RequireTenantMember = (ctx: unknown, tenantId: string) => Promise<boolean> | boolean;
-
-export type MountCronOpts = {
+export type CronRoutesDeps = {
   db: CronDb;
-  requireTenantMember: RequireTenantMember;
+  requireGrant: RequireGrant;
 };
 
 const CreateScheduleBody = type({
@@ -24,23 +24,19 @@ const CreateScheduleBody = type({
   body: "string",
 });
 
-/** Mount `/api/tenants/:tenantId/cron` CRUD onto the host's app. */
-export function mountCron<E extends Env>(app: Hono<E>, opts: MountCronOpts): Hono<E> {
-  const { db, requireTenantMember } = opts;
+export function createCronRoutes({ db, requireGrant }: CronRoutesDeps): Hono<TenantEnv> {
+  const app = new Hono<TenantEnv>();
 
-  app.get("/api/tenants/:tenantId/cron", async (c) => {
-    const tenantId = c.req.param("tenantId");
-    if (!(await requireTenantMember(c, tenantId))) return c.json({ error: "forbidden" }, 403);
+  app.get("/", requireGrant("cron-schedule:*", "read"), async (c) => {
     const rows = await db
       .select()
       .from(cronScheduleTable)
-      .where(eq(cronScheduleTable.tenantId, tenantId));
+      .where(eq(cronScheduleTable.tenantId, c.get("tenant").id));
     return c.json({ schedules: rows });
   });
 
-  app.post("/api/tenants/:tenantId/cron", async (c) => {
-    const tenantId = c.req.param("tenantId");
-    if (!(await requireTenantMember(c, tenantId))) return c.json({ error: "forbidden" }, 403);
+  app.post("/", requireGrant("cron-schedule:*", "create"), async (c) => {
+    const tenantId = c.get("tenant").id;
     const parsed = CreateScheduleBody(await c.req.json().catch(() => undefined));
     if (parsed instanceof type.errors) {
       return c.json({ error: "invalid_body", detail: parsed.summary }, 400);
@@ -67,13 +63,15 @@ export function mountCron<E extends Env>(app: Hono<E>, opts: MountCronOpts): Hon
     return c.json({ schedule: row }, 201);
   });
 
-  app.delete("/api/tenants/:tenantId/cron/:id", async (c) => {
-    const tenantId = c.req.param("tenantId");
-    if (!(await requireTenantMember(c, tenantId))) return c.json({ error: "forbidden" }, 403);
-    const id = c.req.param("id");
+  app.delete("/:id", requireGrant(idResource("cron-schedule", "id"), "manage"), async (c) => {
     const [deleted] = await db
       .delete(cronScheduleTable)
-      .where(and(eq(cronScheduleTable.tenantId, tenantId), eq(cronScheduleTable.id, id)))
+      .where(
+        and(
+          eq(cronScheduleTable.tenantId, c.get("tenant").id),
+          eq(cronScheduleTable.id, c.req.param("id")),
+        ),
+      )
       .returning({ id: cronScheduleTable.id });
     if (deleted === undefined) return c.json({ error: "not_found" }, 404);
     return c.json({ ok: true });
