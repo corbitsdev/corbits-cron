@@ -1,5 +1,4 @@
 export { isValidCronExpression, nextCronFireAfter } from "./cron.js";
-export { applyCronMigrations } from "./schema.js";
 export {
   createCronTicker,
   type CreateCronTickerOpts,
