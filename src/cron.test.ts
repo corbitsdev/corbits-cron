@@ -9,7 +9,7 @@ import {
   isValidTimeZone,
   nextCronFireAfter,
   zonedParts,
-} from "./cron";
+} from "./cron.js";
 
 describe("isValidCronExpression", () => {
   test("accepts standard 5-field expressions", () => {

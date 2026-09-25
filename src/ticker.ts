@@ -5,9 +5,9 @@
 import { eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
-import { nextCronFireAfter } from "./cron";
-import { definitionExists, failStaleAnchorRun, isUnroutableRunTrigger, resolveLiveDeployment } from "./deployment";
-import { cronScheduleTable } from "./schema";
+import { nextCronFireAfter } from "./cron.js";
+import { definitionExists, failStaleAnchorRun, isUnroutableRunTrigger, resolveLiveDeployment } from "./deployment.js";
+import { cronScheduleTable } from "./schema.js";
 
 export type CronDb<TSchema extends Record<string, unknown> = Record<string, unknown>> =
   PostgresJsDatabase<TSchema>;

@@ -4,7 +4,7 @@ Cron schedules for an Interchange hub. A tenant saves a cron expression, the age
 
 ## Runtime support
 
-The published export is TypeScript source (`./src/index.ts`); Bun consumes it directly. Native Node does not load this extensionless TypeScript source as-is.
+The published export is compiled JavaScript plus types (`./dist/index.js` / `./dist/index.d.ts`). Both Bun and native Node consume `dist` directly.
 
 ## Quickstart
 

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { createRunTriggerCronDeliver } from "./deliver";
+import { createRunTriggerCronDeliver } from "./deliver.js";
 
 test("every recipient of a due schedule gets its own trigger", async () => {
   const calls: Array<[string, string, string, string | undefined]> = [];

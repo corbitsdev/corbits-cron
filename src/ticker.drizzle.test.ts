@@ -7,9 +7,9 @@ import { randomUUID } from "node:crypto";
 import { createDB, dropSchema, runMigrations, schema } from "@intx/db";
 import { eq } from "drizzle-orm";
 
-import { applyCronMigrations, cronScheduleTable } from "./schema";
-import { createCronTicker } from "./ticker";
-import { RUN_GRANTS_NOT_ROUTABLE } from "./deployment";
+import { applyCronMigrations, cronScheduleTable } from "./schema.js";
+import { createCronTicker } from "./ticker.js";
+import { RUN_GRANTS_NOT_ROUTABLE } from "./deployment.js";
 import {
   dbTargetFromUrl,
   deleteDefinition,
@@ -18,7 +18,7 @@ import {
   seedLiveRun,
   seedTenant,
   tenantDomainFor,
-} from "./test-seed";
+} from "./test-seed.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIfDb = databaseUrl === undefined ? describe.skip : describe;
