@@ -98,7 +98,7 @@ bun run typecheck
 bun run test
 ```
 
-`bun run test` is `bun test ./src`.
+`bun run test` is `bun test ./src ./tests`; the `tests/` suites need a real Postgres at `DATABASE_URL` and skip without one.
 
 ## License
 
