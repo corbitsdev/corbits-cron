@@ -1,6 +1,6 @@
 {
   "name": "@corbits/cron",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cron schedules for an Interchange hub: grant-gated schedule routes plus a ticker that turns a due row into run-trigger mail",
   "license": "LGPL-2.1-only",
   "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
