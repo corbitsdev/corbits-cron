@@ -24,7 +24,10 @@ const CreateScheduleBody = type({
   body: "string",
 });
 
-export function createCronRoutes({ db, requireGrant }: CronRoutesDeps): Hono<TenantEnv> {
+export function createCronRoutes({
+  db,
+  requireGrant,
+}: CronRoutesDeps): Hono<TenantEnv> {
   const app = new Hono<TenantEnv>();
 
   app.get("/", requireGrant("cron-schedule:*", "read"), async (c) => {
@@ -37,7 +40,9 @@ export function createCronRoutes({ db, requireGrant }: CronRoutesDeps): Hono<Ten
 
   app.post("/", requireGrant("cron-schedule:*", "create"), async (c) => {
     const tenantId = c.get("tenant").id;
-    const parsed = CreateScheduleBody(await c.req.json().catch(() => undefined));
+    const parsed = CreateScheduleBody(
+      await c.req.json().catch(() => undefined),
+    );
     if (parsed instanceof type.errors) {
       return c.json({ error: "invalid_body", detail: parsed.summary }, 400);
     }
@@ -63,19 +68,23 @@ export function createCronRoutes({ db, requireGrant }: CronRoutesDeps): Hono<Ten
     return c.json({ schedule: row }, 201);
   });
 
-  app.delete("/:id", requireGrant(idResource("cron-schedule", "id"), "manage"), async (c) => {
-    const [deleted] = await db
-      .delete(cronScheduleTable)
-      .where(
-        and(
-          eq(cronScheduleTable.tenantId, c.get("tenant").id),
-          eq(cronScheduleTable.id, c.req.param("id")),
-        ),
-      )
-      .returning({ id: cronScheduleTable.id });
-    if (deleted === undefined) return c.json({ error: "not_found" }, 404);
-    return c.json({ ok: true });
-  });
+  app.delete(
+    "/:id",
+    requireGrant(idResource("cron-schedule", "id"), "manage"),
+    async (c) => {
+      const [deleted] = await db
+        .delete(cronScheduleTable)
+        .where(
+          and(
+            eq(cronScheduleTable.tenantId, c.get("tenant").id),
+            eq(cronScheduleTable.id, c.req.param("id")),
+          ),
+        )
+        .returning({ id: cronScheduleTable.id });
+      if (deleted === undefined) return c.json({ error: "not_found" }, 404);
+      return c.json({ ok: true });
+    },
+  );
 
   return app;
 }

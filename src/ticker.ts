@@ -4,11 +4,17 @@ import { eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 import { nextCronFireAfter } from "./cron.js";
-import { definitionExists, failStaleAnchorRun, isUnroutableRunTrigger, resolveLiveDeployment } from "./deployment.js";
+import {
+  definitionExists,
+  failStaleAnchorRun,
+  isUnroutableRunTrigger,
+  resolveLiveDeployment,
+} from "./deployment.js";
 import { cronScheduleTable } from "./schema.js";
 
-export type CronDb<TSchema extends Record<string, unknown> = Record<string, unknown>> =
-  PostgresJsDatabase<TSchema>;
+export type CronDb<
+  TSchema extends Record<string, unknown> = Record<string, unknown>,
+> = PostgresJsDatabase<TSchema>;
 
 /** A due schedule handed to the host. The sender identity is the host's to
  * decide: only the host knows which addresses its mail transport
@@ -29,7 +35,10 @@ export type CreateCronTickerOpts<
   /** Defaults to one minute, cron's resolution. */
   intervalMs?: number;
   /** Told about a delivery that failed, so the host can report it. */
-  onDeliveryError?: (error: unknown, schedule: { id: string; tenantId: string }) => void;
+  onDeliveryError?: (
+    error: unknown,
+    schedule: { id: string; tenantId: string },
+  ) => void;
   /** Told about a tick that failed before delivering, such as a lost DB
    * connection. The next tick retries. */
   onTickError?: (error: unknown) => void;
@@ -77,14 +86,21 @@ const DEFAULT_INTERVAL_MS = 60_000;
 async function tick<TSchema extends Record<string, unknown>>(
   db: CronDb<TSchema>,
   deliver: DeliverCronMail,
-  onDeliveryError: (error: unknown, schedule: { id: string; tenantId: string }) => void,
+  onDeliveryError: (
+    error: unknown,
+    schedule: { id: string; tenantId: string },
+  ) => void,
   onScheduleStopped: (schedule: {
     id: string;
     tenantId: string;
     definitionName: string;
     reason: string;
   }) => void,
-  onScheduleWaiting: (schedule: { id: string; tenantId: string; definitionName: string }) => void,
+  onScheduleWaiting: (schedule: {
+    id: string;
+    tenantId: string;
+    definitionName: string;
+  }) => void,
 ) {
   await db.transaction(async (tx) => {
     const now = new Date();
@@ -101,7 +117,11 @@ async function tick<TSchema extends Record<string, unknown>>(
     for (const row of candidates.filter((row) => isDue(row, now))) {
       // The run behind a target dies on every restart and redeploy, so the
       // address is resolved now rather than stored.
-      const deployment = await resolveLiveDeployment(tx, row.tenantId, row.definitionName);
+      const deployment = await resolveLiveDeployment(
+        tx,
+        row.tenantId,
+        row.definitionName,
+      );
       if (deployment === null) {
         // A restart leaves the agent's definition and drops its run: wait for
         // the run to come back rather than killing the schedule over a gap.
@@ -174,7 +194,13 @@ export function createCronTicker<TSchema extends Record<string, unknown>>(
 
   const runTick = () => {
     if (inFlight !== undefined) return;
-    inFlight = tick(opts.db, opts.deliver, onDeliveryError, onScheduleStopped, onScheduleWaiting)
+    inFlight = tick(
+      opts.db,
+      opts.deliver,
+      onDeliveryError,
+      onScheduleStopped,
+      onScheduleWaiting,
+    )
       .catch(onTickError)
       .finally(() => {
         inFlight = undefined;
