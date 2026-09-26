@@ -12,6 +12,7 @@ import {
   cronRoutesApp,
   describeIfDb,
   type TestDatabase,
+  DB_SETUP_TIMEOUT_MS,
 } from "./helpers.js";
 import { seedDeployment, seedTenant } from "./fixtures.js";
 
@@ -61,7 +62,7 @@ describeIfDb("upgrading a 0.1.0 database", () => {
 
   beforeAll(async () => {
     database = await createTestDatabase(seedWithV010);
-  });
+  }, DB_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
     await database?.drop();

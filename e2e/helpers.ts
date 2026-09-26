@@ -18,6 +18,9 @@ const databaseUrl = process.env.DATABASE_URL;
 export const describeIfDb =
   databaseUrl === undefined ? describe.skip : describe;
 
+/** A fresh database plus every host and cron migration outlasts bun's 5s hook default. */
+export const DB_SETUP_TIMEOUT_MS = 60_000;
+
 export type TestDb = ReturnType<typeof createDB>["db"];
 
 export type TestDatabase = {
