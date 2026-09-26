@@ -6,7 +6,7 @@ export {
   type CronTicker,
   type DeliverCronMail,
 } from "./ticker.js";
-export { mountCron, type MountCronOpts, type RequireTenantMember } from "./mount.js";
+export { createCronRoutes, type CronRoutesDeps } from "./routes.js";
 export { createRunTriggerCronDeliver, type RunTriggerDeliverer } from "./deliver.js";
 export {
   isUnroutableRunTrigger,

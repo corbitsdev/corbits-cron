@@ -1,7 +1,7 @@
 {
   "name": "@corbits/cron",
   "version": "0.1.0",
-  "description": "Cron schedules for an Interchange hub: a CRUD mount plus a ticker that turns a due row into run-trigger mail",
+  "description": "Cron schedules for an Interchange hub: grant-gated schedule routes plus a ticker that turns a due row into run-trigger mail",
   "license": "LGPL-2.1-only",
   "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
   "type": "module",
@@ -44,12 +44,14 @@
   },
   "peerDependencies": {
     "@intx/db": "^0.4.0",
+    "@intx/hub-api": "^0.4.0",
     "drizzle-orm": "^0.45.3",
     "hono": "^4.13.8",
     "postgres": "^3.4.9"
   },
   "devDependencies": {
     "@intx/db": "0.4.0",
+    "@intx/hub-api": "0.4.0",
     "@types/bun": "1.3.9",
     "drizzle-orm": "0.45.3",
     "hono": "4.13.8",
