@@ -1,7 +1,5 @@
 # @corbits/cron
 
-[![npm](https://img.shields.io/npm/v/@corbits/cron.svg)](https://www.npmjs.com/package/@corbits/cron) [![License: LGPL-2.1](https://img.shields.io/badge/license-LGPL--2.1-green.svg)](https://github.com/corbitsdev/corbits-cron/blob/main/LICENSE)
-
 A Corbits hub module that wakes Interchange agents on five-field UTC cron schedules, mounted as `@intx/hub-api` routes on the hub (Interchange's multi-tenant control plane) and stored in its Postgres. A ticker mails each due schedule to its agent's current run, the running instance of the agent's workflow definition.
 
 Schedules support create, list and delete. There is no edit: delete and recreate.

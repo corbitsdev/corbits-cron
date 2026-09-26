@@ -11,6 +11,7 @@ import {
   cronRoutesApp,
   describeIfDb,
   type TestDatabase,
+  DB_SETUP_TIMEOUT_MS,
 } from "./helpers.js";
 import { seedDeployment, seedTenant } from "./fixtures.js";
 
@@ -19,7 +20,7 @@ describeIfDb("createCronRoutes", () => {
 
   beforeAll(async () => {
     database = await createTestDatabase();
-  });
+  }, DB_SETUP_TIMEOUT_MS);
 
   function requireDatabase(): TestDatabase {
     if (database === undefined)

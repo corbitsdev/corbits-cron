@@ -2,7 +2,14 @@
   "name": "@corbits/cron",
   "version": "0.2.0",
   "description": "Cron schedules for an Interchange hub: grant-gated schedule routes plus a ticker that turns a due row into run-trigger mail",
-  "homepage": "https://github.com/corbitsdev/corbits-cron",
+  "keywords": [
+    "corbits",
+    "cron",
+    "hub",
+    "interchange",
+    "scheduler"
+  ],
+  "homepage": "https://github.com/corbitsdev/corbits-cron#readme",
   "bugs": {
     "url": "https://github.com/corbitsdev/corbits-cron/issues"
   },
@@ -20,8 +27,6 @@
   ],
   "type": "module",
   "sideEffects": false,
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -36,14 +41,15 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "prepack": "bun run build",
     "typecheck": "tsc --noEmit",
-    "test": "bun test ./src",
-    "test:e2e": "bun test ./e2e",
     "lint": "oxlint",
     "format": "oxfmt",
-    "format:check": "oxfmt --check"
+    "format:check": "oxfmt --check",
+    "test": "bun test src --pass-with-no-tests",
+    "test:e2e": "bun test e2e",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
   },
   "dependencies": {
     "arktype": "^2.2.3"
@@ -68,6 +74,7 @@
     "postgres": "^3.4.9"
   },
   "engines": {
+    "bun": ">=1.2.0",
     "node": ">=24"
   }
 }

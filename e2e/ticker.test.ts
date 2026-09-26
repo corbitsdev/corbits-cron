@@ -14,6 +14,7 @@ import {
   createTestDatabase,
   describeIfDb,
   type TestDatabase,
+  DB_SETUP_TIMEOUT_MS,
 } from "./helpers.js";
 import {
   deleteDefinition,
@@ -29,7 +30,7 @@ describeIfDb("createCronTicker", () => {
 
   beforeAll(async () => {
     database = await createTestDatabase();
-  });
+  }, DB_SETUP_TIMEOUT_MS);
 
   function requireDatabase(): TestDatabase {
     if (database === undefined)
