@@ -1,21 +1,9 @@
-// Seeding shared by this package's DB-gated tests. Not exported from the
-// package index: test-only.
+// Seeding shared by the DB tests: the rows the hub itself writes.
 import { randomUUID } from "node:crypto";
-import { createDB, schema } from "@intx/db";
+import { schema } from "@intx/db";
 import { and, eq } from "drizzle-orm";
 
-type TestDb = ReturnType<typeof createDB>["db"];
-
-export function dbTargetFromUrl(url: string) {
-  const parsed = new URL(url);
-  return {
-    host: parsed.hostname,
-    port: parsed.port ? Number(parsed.port) : 5432,
-    user: decodeURIComponent(parsed.username),
-    password: decodeURIComponent(parsed.password),
-    database: parsed.pathname.replace(/^\//, ""),
-  };
-}
+import type { TestDb } from "./helpers.js";
 
 export function tenantDomainFor(id: string): string {
   return `${id.replace(/_/g, "-")}.workbench.test`;
