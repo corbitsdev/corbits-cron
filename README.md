@@ -1,18 +1,11 @@
 # @corbits/cron
 
-Cron schedules for an Interchange hub. A tenant saves a cron expression, the agent to wake, and the mail to send it (`subject` / `body`). `createCronTicker` polls for due rows and hands each to the host's transport, so a schedule-triggered workflow is a `mail`-triggered one addressed at itself.
-
-## Runtime support
-
-The published export is compiled JavaScript plus types (`./dist/index.js` / `./dist/index.d.ts`). Both Bun and native Node consume `dist` directly.
+Run an Interchange workflow on a cron schedule.
 
 ## Quickstart
 
 ```sh
 npm add @corbits/cron
-pnpm add @corbits/cron
-yarn add @corbits/cron
-bun add @corbits/cron
 ```
 
 At boot, alongside the rest of the hub's own migrations, apply this package's migration against the hub's database and schema:
@@ -95,7 +88,7 @@ The inline `requireTenantMember` reads the tenant the host's own tenant middlewa
 
 ## How it works
 
-A schedule targets a live deployment by workflow definition name — stable across redeploys. At fire time the ticker mails `<run id>@<tenant domain>`. A schedule whose agent has no live run waits (`waiting_since`); a schedule whose agent was deleted stops. Ticks claim due rows with `SELECT ... FOR UPDATE SKIP LOCKED`. A missed window fires once for the most recent due minute. Unroutable run triggers (`run_grants_not_routable` / `run_mail_not_routable`) fail a stale `running` anchor whose allocation already settled.
+A schedule targets an agent by its workflow definition name, so it survives redeploys. A schedule whose agent has no live run waits (`waiting_since`) and fires again once the agent is back; a schedule whose agent was deleted stops for good. A missed window fires once, for the most recent due minute.
 
 ## Development
 
