@@ -1,7 +1,5 @@
-// Turns due cron schedules into mail. `SELECT ... FOR UPDATE SKIP LOCKED`
-// means two tickers racing the same table split due rows rather than
-// double-fire; a schedule that missed several ticks fires once for the
-// most recent due minute, never once per missed tick.
+// Turns due cron schedules into mail. A schedule that missed several ticks
+// fires once for the most recent due minute, never once per missed tick.
 import { eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
@@ -28,9 +26,13 @@ export type CreateCronTickerOpts<
 > = {
   db: CronDb<TSchema>;
   deliver: DeliverCronMail;
-  intervalMs: number;
+  /** Defaults to one minute, cron's resolution. */
+  intervalMs?: number;
   /** Told about a delivery that failed, so the host can report it. */
   onDeliveryError?: (error: unknown, schedule: { id: string; tenantId: string }) => void;
+  /** Told about a tick that failed before delivering, such as a lost DB
+   * connection. The next tick retries. */
+  onTickError?: (error: unknown) => void;
   /** Told once when a schedule stops because the agent it targets was
    * deleted. A later redeploy does not resume it. */
   onScheduleStopped?: (schedule: {
@@ -70,6 +72,7 @@ function isDue(
 }
 
 const AGENT_DELETED = "agent_deleted";
+const DEFAULT_INTERVAL_MS = 60_000;
 
 async function tick<TSchema extends Record<string, unknown>>(
   db: CronDb<TSchema>,
@@ -165,20 +168,23 @@ export function createCronTicker<TSchema extends Record<string, unknown>>(
   const onDeliveryError = opts.onDeliveryError ?? (() => undefined);
   const onScheduleStopped = opts.onScheduleStopped ?? (() => undefined);
   const onScheduleWaiting = opts.onScheduleWaiting ?? (() => undefined);
+  const onTickError = opts.onTickError ?? (() => undefined);
   let timer: ReturnType<typeof setInterval> | undefined;
   let inFlight: Promise<void> | undefined;
 
   const runTick = () => {
     if (inFlight !== undefined) return;
-    inFlight = tick(opts.db, opts.deliver, onDeliveryError, onScheduleStopped, onScheduleWaiting).finally(() => {
-      inFlight = undefined;
-    });
+    inFlight = tick(opts.db, opts.deliver, onDeliveryError, onScheduleStopped, onScheduleWaiting)
+      .catch(onTickError)
+      .finally(() => {
+        inFlight = undefined;
+      });
   };
 
   return {
     start() {
       if (timer !== undefined) return;
-      timer = setInterval(runTick, opts.intervalMs);
+      timer = setInterval(runTick, opts.intervalMs ?? DEFAULT_INTERVAL_MS);
     },
     stop() {
       if (timer === undefined) return;
