@@ -2,8 +2,22 @@
   "name": "@corbits/cron",
   "version": "0.2.0",
   "description": "Cron schedules for an Interchange hub: grant-gated schedule routes plus a ticker that turns a due row into run-trigger mail",
+  "homepage": "https://github.com/corbitsdev/corbits-cron",
+  "bugs": {
+    "url": "https://github.com/corbitsdev/corbits-cron/issues"
+  },
   "license": "LGPL-2.1-only",
   "author": "Sawyer Cutler <sawyer@dirtroad.dev>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/corbitsdev/corbits-cron.git"
+  },
+  "files": [
+    "dist",
+    "migrations",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -18,25 +32,8 @@
       "default": "./dist/migrations.js"
     }
   },
-  "files": [
-    "dist",
-    "migrations",
-    "README.md",
-    "LICENSE"
-  ],
   "publishConfig": {
     "access": "public"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/corbitsdev/corbits-cron.git"
-  },
-  "homepage": "https://github.com/corbitsdev/corbits-cron",
-  "bugs": {
-    "url": "https://github.com/corbitsdev/corbits-cron/issues"
-  },
-  "engines": {
-    "node": ">=24"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -51,13 +48,6 @@
   "dependencies": {
     "arktype": "^2.2.3"
   },
-  "peerDependencies": {
-    "@intx/db": "^0.4.0",
-    "@intx/hub-api": "^0.4.0",
-    "drizzle-orm": "^0.45.3",
-    "hono": "^4.13.8",
-    "postgres": "^3.4.9"
-  },
   "devDependencies": {
     "@corbits/cron-0.1.0": "npm:@corbits/cron@0.1.0",
     "@intx/db": "0.4.0",
@@ -69,5 +59,15 @@
     "oxlint": "1.85.0",
     "postgres": "3.4.9",
     "typescript": "5.9.3"
+  },
+  "peerDependencies": {
+    "@intx/db": "^0.4.0",
+    "@intx/hub-api": "^0.4.0",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.8",
+    "postgres": "^3.4.9"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

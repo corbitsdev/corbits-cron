@@ -12,10 +12,17 @@ export type RunTriggerDeliverer = {
 };
 
 /** Fan a due schedule's recipients out over a run-trigger deliverer. */
-export function createRunTriggerCronDeliver(deliverer: RunTriggerDeliverer): DeliverCronMail {
+export function createRunTriggerCronDeliver(
+  deliverer: RunTriggerDeliverer,
+): DeliverCronMail {
   return async (message) => {
     for (const address of message.to) {
-      await deliverer.to(address, message.body, message.tenantId, message.subject);
+      await deliverer.to(
+        address,
+        message.body,
+        message.tenantId,
+        message.subject,
+      );
     }
   };
 }

@@ -68,7 +68,8 @@ describeIfDb("upgrading a 0.1.0 database", () => {
   });
 
   function requireDatabase(): TestDatabase {
-    if (database === undefined) throw new Error("test database was not created");
+    if (database === undefined)
+      throw new Error("test database was not created");
     return database;
   }
 
@@ -79,10 +80,17 @@ describeIfDb("upgrading a 0.1.0 database", () => {
   test("0.1.0 schedules are listed, a live one fires and a stopped one stays stopped", async () => {
     const { db, close } = createDB(requireDatabase().config);
     try {
-      const listed = await cronRoutesApp(db, tenantId, allowAll).request("/cron");
+      const listed = await cronRoutesApp(db, tenantId, allowAll).request(
+        "/cron",
+      );
       expect(listed.status).toBe(200);
-      const { schedules } = (await listed.json()) as { schedules: Array<{ id: string }> };
-      expect(schedules.map((row) => row.id).sort()).toEqual([scheduleId, stoppedId]);
+      const { schedules } = (await listed.json()) as {
+        schedules: Array<{ id: string }>;
+      };
+      expect(schedules.map((row) => row.id).sort()).toEqual([
+        scheduleId,
+        stoppedId,
+      ]);
 
       await seedDeployment(db, tenantId, "agent-v010");
       const delivered: string[] = [];
