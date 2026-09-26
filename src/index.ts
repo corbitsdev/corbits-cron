@@ -7,7 +7,10 @@ export {
   type DeliverCronMail,
 } from "./ticker.js";
 export { createCronRoutes, type CronRoutesDeps } from "./routes.js";
-export { createRunTriggerCronDeliver, type RunTriggerDeliverer } from "./deliver.js";
+export {
+  createRunTriggerCronDeliver,
+  type RunTriggerDeliverer,
+} from "./deliver.js";
 export {
   isUnroutableRunTrigger,
   RUN_GRANTS_NOT_ROUTABLE,

@@ -25,14 +25,20 @@ export async function runCronMigrations(
     throw new Error("runCronMigrations: schema name must not be empty");
   }
   const schemaIdent = quoteIdentifier(options.schema);
-  const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
+  const files = (await readdir(MIGRATIONS_DIR))
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
   if (files.length === 0) {
-    throw new Error(`runCronMigrations: no .sql files found in ${MIGRATIONS_DIR}`);
+    throw new Error(
+      `runCronMigrations: no .sql files found in ${MIGRATIONS_DIR}`,
+    );
   }
   const statements: string[] = [];
   for (const file of files) {
     const raw = await readFile(join(MIGRATIONS_DIR, file), "utf8");
-    for (const stmt of raw.replace(/"public"\.(?=")/g, `${schemaIdent}.`).split("--> statement-breakpoint")) {
+    for (const stmt of raw
+      .replace(/"public"\.(?=")/g, `${schemaIdent}.`)
+      .split("--> statement-breakpoint")) {
       if (stmt.trim().length > 0) statements.push(stmt);
     }
   }

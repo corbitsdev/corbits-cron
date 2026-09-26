@@ -5,9 +5,16 @@ import { eq } from "drizzle-orm";
 
 import { cronScheduleTable } from "../src/schema.js";
 import { createCronTicker } from "../src/ticker.js";
-import { createRunTriggerCronDeliver, type RunTriggerDeliverer } from "../src/deliver.js";
+import {
+  createRunTriggerCronDeliver,
+  type RunTriggerDeliverer,
+} from "../src/deliver.js";
 import { RUN_GRANTS_NOT_ROUTABLE } from "../src/deployment.js";
-import { createTestDatabase, describeIfDb, type TestDatabase } from "./helpers.js";
+import {
+  createTestDatabase,
+  describeIfDb,
+  type TestDatabase,
+} from "./helpers.js";
 import {
   deleteDefinition,
   seedAllocation,
@@ -25,7 +32,8 @@ describeIfDb("createCronTicker", () => {
   });
 
   function requireDatabase(): TestDatabase {
-    if (database === undefined) throw new Error("test database was not created");
+    if (database === undefined)
+      throw new Error("test database was not created");
     return database;
   }
 
@@ -83,7 +91,9 @@ describeIfDb("createCronTicker", () => {
       // to whatever test runs next.
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(delivered).toEqual([{ subject: "due", to: [`${runId}@${tenantDomainFor(tenantId)}`] }]);
+      expect(delivered).toEqual([
+        { subject: "due", to: [`${runId}@${tenantDomainFor(tenantId)}`] },
+      ]);
 
       const [firedRow] = await db
         .select()
@@ -205,7 +215,10 @@ describeIfDb("createCronTicker", () => {
       expect(fired).toBe(0);
       expect(stopped).toEqual([id]);
 
-      const [row] = await db.select().from(cronScheduleTable).where(eq(cronScheduleTable.id, id));
+      const [row] = await db
+        .select()
+        .from(cronScheduleTable)
+        .where(eq(cronScheduleTable.id, id));
       expect(row?.stoppedAt).not.toBeNull();
       expect(row?.stoppedReason).toBe("agent_deleted");
       expect(row?.lastFiredAt).toBeNull();
@@ -281,7 +294,12 @@ describeIfDb("createCronTicker", () => {
       await seedTenant(db, tenantId);
       // A previous stack's death: the anchor is still "running" but its
       // sidecar is gone and its allocation already settled released.
-      const runId = await seedDeployment(db, tenantId, "agent-stale-source", "running");
+      const runId = await seedDeployment(
+        db,
+        tenantId,
+        "agent-stale-source",
+        "running",
+      );
       await seedAllocation(db, runId, tenantId, "released");
 
       const id = `sched_stale_${randomUUID().slice(0, 8)}`;
@@ -304,11 +322,14 @@ describeIfDb("createCronTicker", () => {
         deliver: () => {
           deliveries++;
           const address = `${runId}@${tenantDomainFor(tenantId)}`;
-          throw Object.assign(new Error(`run grants not routable for ${address} (run ${runId})`), {
-            code: RUN_GRANTS_NOT_ROUTABLE,
-            address,
-            runId,
-          });
+          throw Object.assign(
+            new Error(`run grants not routable for ${address} (run ${runId})`),
+            {
+              code: RUN_GRANTS_NOT_ROUTABLE,
+              address,
+              runId,
+            },
+          );
         },
         onDeliveryError: (error) => errors.push(error),
         onScheduleWaiting: (schedule) => waiting.push(schedule.id),
@@ -330,7 +351,9 @@ describeIfDb("createCronTicker", () => {
       // The failure is reported — as a real failure naming the run — and the
       // stale anchor is marked terminal.
       expect(errors.length).toBeGreaterThanOrEqual(1);
-      expect(String((errors[0] as Error).message)).toContain("run grants not routable");
+      expect(String((errors[0] as Error).message)).toContain(
+        "run grants not routable",
+      );
       expect(String((errors[0] as Error).message)).toContain(runId);
       expect(runStatus).toBe("failed");
       const firedOnce = deliveries;
@@ -362,7 +385,12 @@ describeIfDb("createCronTicker", () => {
     try {
       const tenantId = `tnt_cron_live_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
-      const runId = await seedDeployment(db, tenantId, "agent-live-source", "running");
+      const runId = await seedDeployment(
+        db,
+        tenantId,
+        "agent-live-source",
+        "running",
+      );
       await seedAllocation(db, runId, tenantId, "allocated");
 
       const id = `sched_live_${randomUUID().slice(0, 8)}`;
@@ -382,11 +410,14 @@ describeIfDb("createCronTicker", () => {
         intervalMs: 20,
         deliver: () => {
           const address = `${runId}@${tenantDomainFor(tenantId)}`;
-          throw Object.assign(new Error(`run grants not routable for ${address} (run ${runId})`), {
-            code: RUN_GRANTS_NOT_ROUTABLE,
-            address,
-            runId,
-          });
+          throw Object.assign(
+            new Error(`run grants not routable for ${address} (run ${runId})`),
+            {
+              code: RUN_GRANTS_NOT_ROUTABLE,
+              address,
+              runId,
+            },
+          );
         },
         onDeliveryError: (error) => errors.push(error),
       });

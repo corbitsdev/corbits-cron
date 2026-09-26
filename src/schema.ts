@@ -26,5 +26,7 @@ export const cronScheduleTable = cronSchema.table("schedule", {
   // fires again.
   stoppedAt: timestamp("stopped_at", { withTimezone: true }),
   stoppedReason: text("stopped_reason"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
 });

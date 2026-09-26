@@ -20,7 +20,9 @@ export type LiveDeployment = {
 /** The tenant's current live deployment for `definitionName`, as the hub
  * lists deployments: the anchor run (`id = anchor_run_id`) of a definition
  * with that name, newest first. `null` when the agent has none. */
-export async function resolveLiveDeployment<TSchema extends Record<string, unknown>>(
+export async function resolveLiveDeployment<
+  TSchema extends Record<string, unknown>,
+>(
   db: PostgresJsDatabase<TSchema>,
   tenantId: string,
   definitionName: string,
@@ -28,7 +30,10 @@ export async function resolveLiveDeployment<TSchema extends Record<string, unkno
   const [row] = await db
     .select({ runId: workflowRun.id, domain: tenant.domain })
     .from(workflowRun)
-    .innerJoin(workflowDefinition, eq(workflowRun.definitionId, workflowDefinition.id))
+    .innerJoin(
+      workflowDefinition,
+      eq(workflowRun.definitionId, workflowDefinition.id),
+    )
     .innerJoin(tenant, eq(workflowRun.tenantId, tenant.id))
     .where(
       and(
@@ -57,7 +62,10 @@ export async function definitionExists<TSchema extends Record<string, unknown>>(
     .select({ id: workflowDefinition.id })
     .from(workflowDefinition)
     .where(
-      and(eq(workflowDefinition.tenantId, tenantId), eq(workflowDefinition.name, definitionName)),
+      and(
+        eq(workflowDefinition.tenantId, tenantId),
+        eq(workflowDefinition.name, definitionName),
+      ),
     )
     .limit(1);
   return row !== undefined;
@@ -80,11 +88,14 @@ export type UnroutableRunTrigger = {
 };
 
 /** Structural match for the deliverer's unroutable-trigger rejection. */
-export function isUnroutableRunTrigger(error: unknown): error is UnroutableRunTrigger {
+export function isUnroutableRunTrigger(
+  error: unknown,
+): error is UnroutableRunTrigger {
   if (typeof error !== "object" || error === null) return false;
   const rec = error as Record<string, unknown>;
   return (
-    (rec["code"] === RUN_GRANTS_NOT_ROUTABLE || rec["code"] === RUN_MAIL_NOT_ROUTABLE) &&
+    (rec["code"] === RUN_GRANTS_NOT_ROUTABLE ||
+      rec["code"] === RUN_MAIL_NOT_ROUTABLE) &&
     typeof rec["address"] === "string" &&
     typeof rec["runId"] === "string"
   );
@@ -100,7 +111,9 @@ export function isUnroutableRunTrigger(error: unknown): error is UnroutableRunTr
  * the row; false when the allocation is still active, missing, or the row is
  * already terminal.
  */
-export async function failStaleAnchorRun<TSchema extends Record<string, unknown>>(
+export async function failStaleAnchorRun<
+  TSchema extends Record<string, unknown>,
+>(
   db: PostgresJsDatabase<TSchema>,
   runId: string,
   now: Date = new Date(),
@@ -111,11 +124,17 @@ export async function failStaleAnchorRun<TSchema extends Record<string, unknown>
     .where(eq(sidecarAllocation.anchorRunId, runId))
     .limit(1);
   if (allocation === undefined) return false;
-  if (allocation.status !== "released" && allocation.status !== "failed") return false;
+  if (allocation.status !== "released" && allocation.status !== "failed")
+    return false;
   const updated = await db
     .update(workflowRun)
     .set({ status: "failed", endedAt: now })
-    .where(and(eq(workflowRun.id, runId), inArray(workflowRun.status, [...liveWorkflowRunStatuses])))
+    .where(
+      and(
+        eq(workflowRun.id, runId),
+        inArray(workflowRun.status, [...liveWorkflowRunStatuses]),
+      ),
+    )
     .returning({ id: workflowRun.id });
   return updated.length > 0;
 }
