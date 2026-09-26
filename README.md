@@ -8,10 +8,14 @@ Run an Interchange workflow on a cron schedule.
 npm add @corbits/cron
 ```
 
-At boot, alongside the rest of the hub's own migrations, apply this package's migration against the hub's database and schema:
+At boot, right after Interchange's `runMigrations`, apply this package's migrations with the same `config` and `schema`. The `cron.schedule` table is created on its own `cron` Postgres schema, with its tenant FK pointing into `schema`:
 
 ```ts
-await applyCronMigrations(databaseUrl, { tenantSchema });
+import { runMigrations } from "@intx/db";
+import { runCronMigrations } from "@corbits/cron/migrations";
+
+await runMigrations(config, { schema: "public" });
+await runCronMigrations(config, { schema: "public" });
 ```
 
 Mounting is `mountCron(app, opts)` (schedule CRUD, at `/api/tenants/:tenantId/cron`) plus `createCronTicker(opts)` (the poller that turns a due row into mail) started together, on the hub's existing `db`. The function below is complete and mounts both:
@@ -71,7 +75,7 @@ export function installCron(
 | Param | Type | What the host provides |
 | --- | --- | --- |
 | `app` | `Hono` | Schedule CRUD is mounted on it at `/api/tenants/:tenantId/cron`. |
-| `db` | `CronDb` | The hub's existing drizzle handle — the same one `applyCronMigrations` migrated into. |
+| `db` | `CronDb` | The hub's existing drizzle handle — the same one `runCronMigrations` migrated into. |
 | `deliverer` | `RunTriggerDeliverer` | Turns a due schedule's recipient into mail; `createRunTriggerCronDeliver` adapts it to the ticker's `DeliverCronMail` shape. |
 | `onError` | `(error: unknown) => void` (optional) | Told about a failed delivery or a schedule that stopped, so the host can report it; defaults to `console.error`. |
 
