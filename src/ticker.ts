@@ -105,12 +105,21 @@ async function tick<TSchema extends Record<string, unknown>>(
     definitionName: string;
   }) => void,
 ) {
+  const now = new Date();
+  const stopped: Parameters<typeof onScheduleStopped>[0][] = [];
+  const waiting: Parameters<typeof onScheduleWaiting>[0][] = [];
+  const claimed: Array<{
+    row: typeof cronScheduleTable.$inferSelect;
+    address: string;
+  }> = [];
+
+  // Claim, then deliver. One short transaction locks every row (SKIP LOCKED
+  // means concurrent tickers split the due rows rather than double-fire
+  // any of them), decides which are due, and advances lastFiredAt on each
+  // it will deliver. Delivery runs after that commits and outside the
+  // lock, so a slow deliverer blocks no replica and a tick that dies
+  // mid-batch never re-fires what it claimed: at most once per due minute.
   await db.transaction(async (tx) => {
-    const now = new Date();
-    // Every row, locked against a concurrent ticker (SKIP LOCKED means two
-    // tickers racing this table split the due rows rather than double-fire
-    // any of them); which ones are actually due is a JS-side check because
-    // "due" depends on parsing each row's own cron expression.
     const candidates = await tx
       .select()
       .from(cronScheduleTable)
@@ -120,12 +129,17 @@ async function tick<TSchema extends Record<string, unknown>>(
     for (const row of candidates) {
       const due = dueness(row, now);
       if (due === "idle") continue;
+      const schedule = {
+        id: row.id,
+        tenantId: row.tenantId,
+        definitionName: row.definitionName,
+      };
       if (due === "invalid") {
         await tx
           .update(cronScheduleTable)
           .set({ stoppedAt: now, stoppedReason: INVALID_EXPRESSION })
           .where(eq(cronScheduleTable.id, row.id));
-        onScheduleStopped({
+        stopped.push({
           id: row.id,
           tenantId: row.tenantId,
           definitionName: row.definitionName,
@@ -149,11 +163,7 @@ async function tick<TSchema extends Record<string, unknown>>(
               .update(cronScheduleTable)
               .set({ waitingSince: now })
               .where(eq(cronScheduleTable.id, row.id));
-            onScheduleWaiting({
-              id: row.id,
-              tenantId: row.tenantId,
-              definitionName: row.definitionName,
-            });
+            waiting.push(schedule);
           }
           continue;
         }
@@ -161,7 +171,7 @@ async function tick<TSchema extends Record<string, unknown>>(
           .update(cronScheduleTable)
           .set({ stoppedAt: now, stoppedReason: AGENT_DELETED })
           .where(eq(cronScheduleTable.id, row.id));
-        onScheduleStopped({
+        stopped.push({
           id: row.id,
           tenantId: row.tenantId,
           definitionName: row.definitionName,
@@ -169,34 +179,41 @@ async function tick<TSchema extends Record<string, unknown>>(
         });
         continue;
       }
-      // One schedule's failed delivery is its own: the tick still advances
-      // every due row, so a permanently undeliverable schedule cannot block
-      // the rest of the table or re-fire every minute forever.
-      try {
-        await deliver({
-          to: [deployment.address],
-          subject: row.subject,
-          body: row.body,
-          tenantId: row.tenantId,
-        });
-      } catch (error) {
-        // The deliverer names the dead run it could not route to. When that
-        // run's sidecar can never come back (its allocation already settled),
-        // fail the stale anchor now: the next tick then sees no live
-        // deployment and waits for the agent to come back instead of
-        // delivering into the dead run every minute. The error is still
-        // reported — it is a real delivery failure, once, not tick noise.
-        if (isUnroutableRunTrigger(error)) {
-          await failStaleAnchorRun(tx, error.runId, now);
-        }
-        onDeliveryError(error, { id: row.id, tenantId: row.tenantId });
-      }
       await tx
         .update(cronScheduleTable)
         .set({ lastFiredAt: now, waitingSince: null })
         .where(eq(cronScheduleTable.id, row.id));
+      claimed.push({ row, address: deployment.address });
     }
   });
+
+  for (const schedule of stopped) onScheduleStopped(schedule);
+  for (const schedule of waiting) onScheduleWaiting(schedule);
+
+  // One schedule's failed delivery is its own: the rest of the batch still
+  // delivers, and a permanently undeliverable schedule fires once per due
+  // minute, not every tick.
+  for (const { row, address } of claimed) {
+    try {
+      await deliver({
+        to: [address],
+        subject: row.subject,
+        body: row.body,
+        tenantId: row.tenantId,
+      });
+    } catch (error) {
+      // The deliverer names the dead run it could not route to. When that
+      // run's sidecar can never come back (its allocation already settled),
+      // fail the stale anchor now: the next tick then sees no live
+      // deployment and waits for the agent to come back instead of
+      // delivering into the dead run every minute. The error is still
+      // reported — it is a real delivery failure, once, not tick noise.
+      if (isUnroutableRunTrigger(error)) {
+        await failStaleAnchorRun(db, error.runId, now);
+      }
+      onDeliveryError(error, { id: row.id, tenantId: row.tenantId });
+    }
+  }
 }
 
 /** Ticks every `intervalMs`, delivering each due schedule as mail. */

@@ -59,6 +59,8 @@ Paths are relative to where the host mounts the sub-app.
 
 Returns `{ start(), stop() }`.
 
+Delivery is at most once per due minute. Each tick first commits `lastFiredAt` on every due row it claims, then calls `deliver` outside the row lock. A process that dies mid-batch, or a `deliver` that throws, drops that minute's fire rather than repeating it; the schedule fires again at its next matching minute. Stop and waiting callbacks run after their change commits.
+
 | `opts`              | Type                                   | Purpose                                                                                                 |
 | ------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `db`                | `CronDb`                               | The hub's drizzle handle.                                                                               |
