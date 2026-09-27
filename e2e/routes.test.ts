@@ -1,62 +1,34 @@
-// DB-gated: create validates its target against the workflow definitions the
-// hub itself writes, so it needs a real database.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+// Create validates its target against the workflow definitions the hub
+// itself writes, so it needs a real database.
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { createDB, dropSchema, runMigrations } from "@intx/db";
+import { createDB } from "@intx/db";
 import type { RequireGrant, TenantEnv } from "@intx/hub-api";
-import { Hono } from "hono";
+import type { Hono } from "hono";
 
-import { runCronMigrations } from "./migrations.js";
-import { createCronRoutes } from "./routes.js";
-import { dbTargetFromUrl, seedDeployment, seedTenant } from "./test-seed.js";
-
-const databaseUrl = process.env.DATABASE_URL;
-const describeIfDb = databaseUrl === undefined ? describe.skip : describe;
-
-const SCHEMA = "cron_mount_test";
+import {
+  createTestDatabase,
+  cronRoutesApp,
+  describeIfDb,
+  type TestDatabase,
+} from "./helpers.js";
+import { seedDeployment, seedTenant } from "./fixtures.js";
 
 describeIfDb("createCronRoutes", () => {
-  const target = dbTargetFromUrl(databaseUrl ?? "postgres://localhost:5432/unused");
+  let database: TestDatabase | undefined;
 
   beforeAll(async () => {
-    await runMigrations(target, { schema: SCHEMA });
-    await runCronMigrations(target, { schema: SCHEMA });
+    database = await createTestDatabase();
   });
+
+  function requireDatabase(): TestDatabase {
+    if (database === undefined) throw new Error("test database was not created");
+    return database;
+  }
 
   afterAll(async () => {
-    await dropSchema(target, { schema: SCHEMA });
+    await database?.drop();
   });
-
-  /** Mounts the routes the way a host does: its tenant middleware has
-   * already placed the tenant and principal on the context. */
-  function host(db: ReturnType<typeof createDB>["db"], tenantId: string, requireGrant: RequireGrant) {
-    const app = new Hono<TenantEnv>();
-    app.use("*", async (c, next) => {
-      const now = new Date(0);
-      c.set("tenant", {
-        id: tenantId,
-        name: tenantId,
-        slug: tenantId,
-        domain: `${tenantId}.example`,
-        parentId: null,
-        config: null,
-        createdAt: now,
-        updatedAt: now,
-      });
-      c.set("principal", {
-        id: "prn_test",
-        tenantId,
-        kind: "user",
-        refId: "usr_test",
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      });
-      await next();
-    });
-    app.route("/cron", createCronRoutes({ db, requireGrant }));
-    return app;
-  }
 
   const allowAll: RequireGrant = () => async (_c, next) => {
     await next();
@@ -71,13 +43,13 @@ describeIfDb("createCronRoutes", () => {
   }
 
   test("a known agent is saved even with no live run; an unknown name is rejected", async () => {
-    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    const { db, close } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_mnt_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
       await seedDeployment(db, tenantId, "agent-live-source", "completed");
 
-      const app = host(db, tenantId, allowAll);
+      const app = cronRoutesApp(db, tenantId, allowAll);
 
       const created = await post(app, {
         expression: "0 9 * * *",
@@ -103,7 +75,7 @@ describeIfDb("createCronRoutes", () => {
   });
 
   test("each route is gated by the host's requireGrant", async () => {
-    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    const { db, close } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_mnt_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
@@ -115,7 +87,7 @@ describeIfDb("createCronRoutes", () => {
         checked.push(`${resolved} ${action}`);
         return c.json({ error: "forbidden" }, 403);
       };
-      const app = host(db, tenantId, denyAll);
+      const app = cronRoutesApp(db, tenantId, denyAll);
 
       expect((await app.request("/cron")).status).toBe(403);
       const created = await post(app, {

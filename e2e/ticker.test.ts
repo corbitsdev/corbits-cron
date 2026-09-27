@@ -1,45 +1,40 @@
-// DB-gated: skipped when no DATABASE_URL is reachable. Migrations run into
-// a scratch schema so this test never touches a real tenant table;
-// `runCronMigrations` is told that scratch schema so its `tenant_id` FK
-// targets it.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { createDB, dropSchema, runMigrations, schema } from "@intx/db";
+import { createDB, schema } from "@intx/db";
 import { eq } from "drizzle-orm";
 
-import { runCronMigrations } from "./migrations.js";
-import { cronScheduleTable } from "./schema.js";
-import { createCronTicker } from "./ticker.js";
-import { RUN_GRANTS_NOT_ROUTABLE } from "./deployment.js";
+import { cronScheduleTable } from "../src/schema.js";
+import { createCronTicker } from "../src/ticker.js";
+import { createRunTriggerCronDeliver, type RunTriggerDeliverer } from "../src/deliver.js";
+import { RUN_GRANTS_NOT_ROUTABLE } from "../src/deployment.js";
+import { createTestDatabase, describeIfDb, type TestDatabase } from "./helpers.js";
 import {
-  dbTargetFromUrl,
   deleteDefinition,
   seedAllocation,
   seedDeployment,
   seedLiveRun,
   seedTenant,
   tenantDomainFor,
-} from "./test-seed.js";
-
-const databaseUrl = process.env.DATABASE_URL;
-const describeIfDb = databaseUrl === undefined ? describe.skip : describe;
-
-const SCHEMA = "cron_ticker_test";
+} from "./fixtures.js";
 
 describeIfDb("createCronTicker", () => {
-  const target = dbTargetFromUrl(databaseUrl ?? "postgres://localhost:5432/unused");
+  let database: TestDatabase | undefined;
 
   beforeAll(async () => {
-    await runMigrations(target, { schema: SCHEMA });
-    await runCronMigrations(target, { schema: SCHEMA });
+    database = await createTestDatabase();
   });
 
+  function requireDatabase(): TestDatabase {
+    if (database === undefined) throw new Error("test database was not created");
+    return database;
+  }
+
   afterAll(async () => {
-    await dropSchema(target, { schema: SCHEMA });
+    await database?.drop();
   });
 
   test("a due row is mailed at its deployment's current run address", async () => {
-    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    const { db, close } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
@@ -101,7 +96,7 @@ describeIfDb("createCronTicker", () => {
   });
 
   test("no live run but the agent is still there: waits, then delivers when it returns", async () => {
-    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    const { db, close } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_wait_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
@@ -170,7 +165,7 @@ describeIfDb("createCronTicker", () => {
   });
 
   test("a schedule whose agent was deleted stops instead of firing", async () => {
-    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    const { db, close } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_gone_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
@@ -219,9 +214,9 @@ describeIfDb("createCronTicker", () => {
     }
   });
 
-  test("SKIP LOCKED means two concurrent tickers never double-fire a row", async () => {
-    const { db: dbA, close: closeA } = createDB({ ...target, schema: SCHEMA });
-    const { db: dbB, close: closeB } = createDB({ ...target, schema: SCHEMA });
+  test("two concurrent tickers deliver a due row exactly once", async () => {
+    const { db: dbA, close: closeA } = createDB(requireDatabase().config);
+    const { db: dbB, close: closeB } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_race_${randomUUID().slice(0, 8)}`;
       await seedTenant(dbA, tenantId);
@@ -238,33 +233,41 @@ describeIfDb("createCronTicker", () => {
         createdAt: new Date(Date.now() - 2 * 60_000),
       });
 
-      let fireCount = 0;
+      const delivered: string[] = [];
+      const deliverer: RunTriggerDeliverer = {
+        to: async (address) => {
+          delivered.push(address);
+        },
+      };
       const tickerA = createCronTicker({
         db: dbA,
         intervalMs: 20,
-        deliver: () => {
-          fireCount++;
-        },
+        deliver: createRunTriggerCronDeliver(deliverer),
       });
       const tickerB = createCronTicker({
         db: dbB,
         intervalMs: 20,
-        deliver: () => {
-          fireCount++;
-        },
+        deliver: createRunTriggerCronDeliver(deliverer),
       });
       tickerA.start();
       tickerB.start();
       // Polling, not a fixed sleep: tick latency follows DB load.
-      for (let i = 0; i < 250 && fireCount === 0; i++) {
+      for (let i = 0; i < 1000 && delivered.length === 0; i++) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
+      // Both tickers keep racing past the first delivery.
+      await new Promise((resolve) => setTimeout(resolve, 300));
       tickerA.stop();
       tickerB.stop();
       // Let an in-flight tick settle before close() ends the client.
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(fireCount).toBe(1);
+      expect(delivered).toHaveLength(1);
+      const [row] = await dbA
+        .select({ lastFiredAt: cronScheduleTable.lastFiredAt })
+        .from(cronScheduleTable)
+        .where(eq(cronScheduleTable.id, id));
+      expect(row?.lastFiredAt).toBeInstanceOf(Date);
     } finally {
       await closeA();
       await closeB();
@@ -272,7 +275,7 @@ describeIfDb("createCronTicker", () => {
   });
 
   test("an unroutable dead run with a settled allocation fails the stale anchor, then waits", async () => {
-    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    const { db, close } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_stale_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
@@ -355,7 +358,7 @@ describeIfDb("createCronTicker", () => {
   });
 
   test("an unroutable run whose allocation is still active stays live", async () => {
-    const { db, close } = createDB({ ...target, schema: SCHEMA });
+    const { db, close } = createDB(requireDatabase().config);
     try {
       const tenantId = `tnt_cron_live_${randomUUID().slice(0, 8)}`;
       await seedTenant(db, tenantId);
