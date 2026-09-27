@@ -15,7 +15,8 @@ import { createCronRoutes } from "../src/routes.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 
-export const describeIfDb = databaseUrl === undefined ? describe.skip : describe;
+export const describeIfDb =
+  databaseUrl === undefined ? describe.skip : describe;
 
 export type TestDb = ReturnType<typeof createDB>["db"];
 
@@ -33,7 +34,8 @@ function adminClient(url: string) {
 export async function createTestDatabase(
   beforeCron?: (config: DBConfig) => Promise<void>,
 ): Promise<TestDatabase> {
-  if (databaseUrl === undefined) throw new Error("createTestDatabase: DATABASE_URL is unset");
+  if (databaseUrl === undefined)
+    throw new Error("createTestDatabase: DATABASE_URL is unset");
   const name = `cron_test_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const admin = adminClient(databaseUrl);
   try {
@@ -70,7 +72,11 @@ export async function createTestDatabase(
 
 /** Mounts `createCronRoutes` at `/cron` the way a host does: its tenant
  * middleware has already placed the tenant and principal on the context. */
-export function cronRoutesApp(db: TestDb, tenantId: string, requireGrant: RequireGrant): Hono<TenantEnv> {
+export function cronRoutesApp(
+  db: TestDb,
+  tenantId: string,
+  requireGrant: RequireGrant,
+): Hono<TenantEnv> {
   const app = new Hono<TenantEnv>();
   app.use("*", async (c, next) => {
     const now = new Date(0);

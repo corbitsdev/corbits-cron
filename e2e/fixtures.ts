@@ -55,7 +55,8 @@ export async function seedLiveRun(
       ),
     )
     .limit(1);
-  if (definition === undefined) throw new Error(`no definition named ${definitionName}`);
+  if (definition === undefined)
+    throw new Error(`no definition named ${definitionName}`);
   const runId = `run_${randomUUID().slice(0, 8)}`;
   await db.insert(schema.workflowRun).values({
     id: runId,
@@ -102,7 +103,11 @@ export async function deleteDefinition(
       ),
     );
   for (const row of rows) {
-    await db.delete(schema.workflowRun).where(eq(schema.workflowRun.definitionId, row.id));
-    await db.delete(schema.workflowDefinition).where(eq(schema.workflowDefinition.id, row.id));
+    await db
+      .delete(schema.workflowRun)
+      .where(eq(schema.workflowRun.definitionId, row.id));
+    await db
+      .delete(schema.workflowDefinition)
+      .where(eq(schema.workflowDefinition.id, row.id));
   }
 }

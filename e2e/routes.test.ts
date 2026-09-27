@@ -22,7 +22,8 @@ describeIfDb("createCronRoutes", () => {
   });
 
   function requireDatabase(): TestDatabase {
-    if (database === undefined) throw new Error("test database was not created");
+    if (database === undefined)
+      throw new Error("test database was not created");
     return database;
   }
 
@@ -58,7 +59,9 @@ describeIfDb("createCronRoutes", () => {
         body: "go",
       });
       expect(created.status).toBe(201);
-      const createdBody = (await created.json()) as { schedule: { definitionName: string } };
+      const createdBody = (await created.json()) as {
+        schedule: { definitionName: string };
+      };
       expect(createdBody.schedule.definitionName).toBe("agent-live-source");
 
       const rejected = await post(app, {
@@ -83,7 +86,10 @@ describeIfDb("createCronRoutes", () => {
 
       const checked: string[] = [];
       const denyAll: RequireGrant = (resource, action) => async (c) => {
-        const resolved = typeof resource === "function" ? resource({ param: (name) => c.req.param(name) }) : resource;
+        const resolved =
+          typeof resource === "function"
+            ? resource({ param: (name) => c.req.param(name) })
+            : resource;
         checked.push(`${resolved} ${action}`);
         return c.json({ error: "forbidden" }, 403);
       };
@@ -97,7 +103,9 @@ describeIfDb("createCronRoutes", () => {
         body: "go",
       });
       expect(created.status).toBe(403);
-      expect((await app.request("/cron/sched_1", { method: "DELETE" })).status).toBe(403);
+      expect(
+        (await app.request("/cron/sched_1", { method: "DELETE" })).status,
+      ).toBe(403);
       expect(checked).toEqual([
         "cron-schedule:* read",
         "cron-schedule:* create",
