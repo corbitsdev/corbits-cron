@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { createDB, schema } from "@intx/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { cronScheduleTable } from "../src/schema.js";
 import { createCronTicker } from "../src/ticker.js";
@@ -14,6 +14,7 @@ import {
   createTestDatabase,
   describeIfDb,
   type TestDatabase,
+  type TestDb,
   DB_SETUP_TIMEOUT_MS,
 } from "./helpers.js";
 import {
@@ -295,63 +296,129 @@ describeIfDb("createCronTicker", () => {
     }
   });
 
-  test("two concurrent tickers deliver a due row exactly once", async () => {
-    const { db: dbA, close: closeA } = createDB(requireDatabase().config);
-    const { db: dbB, close: closeB } = createDB(requireDatabase().config);
-    try {
-      const tenantId = `tnt_cron_race_${randomUUID().slice(0, 8)}`;
-      await seedTenant(dbA, tenantId);
-      await seedDeployment(dbA, tenantId, "agent-race-source");
-
-      const id = `sched_race_${randomUUID().slice(0, 8)}`;
-      await dbA.insert(cronScheduleTable).values({
+  async function seedDueBatch(
+    db: TestDb,
+    label: string,
+    count: number,
+  ): Promise<{ tenantId: string; ids: string[] }> {
+    const tenantId = `tnt_cron_${label}_${randomUUID().slice(0, 8)}`;
+    await seedTenant(db, tenantId);
+    await seedDeployment(db, tenantId, `agent-${label}-source`);
+    const ids = Array.from(
+      { length: count },
+      (_, i) => `sched_${label}_${i}_${randomUUID().slice(0, 8)}`,
+    );
+    // Due once (Jan 1 has passed since creation), and not again next minute,
+    // so a tick that crosses a minute boundary cannot legitimately re-fire.
+    await db.insert(cronScheduleTable).values(
+      ids.map((id) => ({
         id,
         tenantId,
-        expression: "* * * * *",
-        definitionName: "agent-race-source",
-        subject: "race",
-        body: "fire once",
-        createdAt: new Date(Date.now() - 2 * 60_000),
-      });
+        expression: "0 0 1 1 *",
+        definitionName: `agent-${label}-source`,
+        subject: id,
+        body: "b",
+        createdAt: new Date(Date.now() - 400 * 24 * 60 * 60_000),
+      })),
+    );
+    return { tenantId, ids };
+  }
 
+  function countBy(subjects: string[]): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const subject of subjects) {
+      counts.set(subject, (counts.get(subject) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  test("a tick killed mid-batch delivers each row at most once", async () => {
+    const config = requireDatabase().config;
+    const crashed = createDB(config);
+    const survivor = createDB(config);
+    try {
+      const { ids } = await seedDueBatch(crashed.db, "crash", 21);
       const delivered: string[] = [];
-      const deliverer: RunTriggerDeliverer = {
-        to: async (address) => {
-          delivered.push(address);
+      let killed = false;
+      // The fifth delivery kills the tick's Postgres sessions and never
+      // returns, like a process dying mid-batch.
+      const crashing = createCronTicker({
+        db: crashed.db,
+        intervalMs: 20,
+        deliver: async (message) => {
+          if (!ids.includes(message.subject)) return;
+          delivered.push(message.subject);
+          if (delivered.length < 5) return;
+          killed = true;
+          await crashed.db.execute(
+            sql`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()`,
+          );
+          await new Promise(() => undefined);
         },
-      };
-      const tickerA = createCronTicker({
-        db: dbA,
-        intervalMs: 20,
-        deliver: createRunTriggerCronDeliver(deliverer),
       });
-      const tickerB = createCronTicker({
-        db: dbB,
-        intervalMs: 20,
-        deliver: createRunTriggerCronDeliver(deliverer),
-      });
-      tickerA.start();
-      tickerB.start();
-      // Polling, not a fixed sleep: tick latency follows DB load.
-      for (let i = 0; i < 1000 && delivered.length === 0; i++) {
+      crashing.start();
+      for (let i = 0; i < 250 && !killed; i++) {
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      // Both tickers keep racing past the first delivery.
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      tickerA.stop();
-      tickerB.stop();
-      // Let an in-flight tick settle before close() ends the client.
+      crashing.stop();
+
+      const recovering = createCronTicker({
+        db: survivor.db,
+        intervalMs: 20,
+        deliver: (message) => {
+          if (ids.includes(message.subject)) delivered.push(message.subject);
+        },
+      });
+      recovering.start();
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      recovering.stop();
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(delivered).toHaveLength(1);
-      const [row] = await dbA
-        .select({ lastFiredAt: cronScheduleTable.lastFiredAt })
-        .from(cronScheduleTable)
-        .where(eq(cronScheduleTable.id, id));
-      expect(row?.lastFiredAt).toBeInstanceOf(Date);
+      expect(killed).toBe(true);
+      expect([...countBy(delivered).values()].every((n) => n === 1)).toBe(true);
     } finally {
-      await closeA();
-      await closeB();
+      await Promise.race([
+        crashed.close(),
+        new Promise((resolve) => setTimeout(resolve, 1_000)),
+      ]);
+      await survivor.close();
+    }
+  });
+
+  test("three concurrent tickers deliver each row exactly once", async () => {
+    const handles = [1, 2, 3].map(() => createDB(requireDatabase().config));
+    try {
+      const [first] = handles;
+      if (first === undefined) throw new Error("no db handle");
+      const { ids } = await seedDueBatch(first.db, "trio", 21);
+      const delivered: string[] = [];
+      const deliverer: RunTriggerDeliverer = {
+        to: async (_address, _content, _tenantId, subject) => {
+          if (subject === undefined || !ids.includes(subject)) return;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          delivered.push(subject);
+        },
+      };
+      const tickers = handles.map(({ db }) =>
+        createCronTicker({
+          db,
+          intervalMs: 20,
+          deliver: createRunTriggerCronDeliver(deliverer),
+        }),
+      );
+      for (const ticker of tickers) ticker.start();
+      for (let i = 0; i < 250 && delivered.length < ids.length; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      // All three keep racing past the last delivery.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      for (const ticker of tickers) ticker.stop();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      const counts = countBy(delivered);
+      expect(ids.map((id) => counts.get(id))).toEqual(ids.map(() => 1));
+    } finally {
+      for (const handle of handles) await handle.close();
     }
   });
 
