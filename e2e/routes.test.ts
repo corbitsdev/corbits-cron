@@ -78,6 +78,37 @@ describeIfDb("createCronRoutes", () => {
     }
   });
 
+  test("an expression that can never fire or is over the caps is rejected", async () => {
+    const { db, close } = createDB(requireDatabase().config);
+    try {
+      const tenantId = `tnt_cron_expr_${randomUUID().slice(0, 8)}`;
+      await seedTenant(db, tenantId);
+      await seedDeployment(db, tenantId, "agent-expr-source");
+      const app = cronRoutesApp(db, tenantId, allowAll);
+
+      const huge = Array.from({ length: 5000 }, () => "1").join(",");
+      for (const expression of ["0 0 31 2 *", `${huge} * * * *`]) {
+        const response = await post(app, {
+          expression,
+          definitionName: "agent-expr-source",
+          subject: "s",
+          body: "b",
+        });
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: "invalid_expression" });
+      }
+      const leap = await post(app, {
+        expression: "0 0 29 2 *",
+        definitionName: "agent-expr-source",
+        subject: "s",
+        body: "b",
+      });
+      expect(leap.status).toBe(201);
+    } finally {
+      await close();
+    }
+  });
+
   test("each route is gated by the host's requireGrant", async () => {
     const { db, close } = createDB(requireDatabase().config);
     try {

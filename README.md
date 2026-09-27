@@ -2,7 +2,7 @@
 
 A Corbits hub module that wakes Interchange agents on five-field UTC cron schedules, mounted as `@intx/hub-api` routes on the hub (Interchange's multi-tenant control plane) and stored in its Postgres. A ticker mails each due schedule to its agent's current run, the running instance of the agent's workflow definition.
 
-Schedules support create, list and delete. There is no edit: delete and recreate.
+Schedules support create, list and delete. There is no edit: delete and recreate. An expression must be able to fire (no Feb 30), at most 256 characters and 64 comma clauses.
 
 ## Why @corbits/cron?
 
@@ -59,15 +59,15 @@ Paths are relative to where the host mounts the sub-app.
 
 Returns `{ start(), stop() }`.
 
-| `opts`              | Type                                   | Purpose                                                                            |
-| ------------------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
-| `db`                | `CronDb`                               | The hub's drizzle handle.                                                          |
-| `deliver`           | `DeliverCronMail`                      | Sends one due schedule's mail. `createRunTriggerCronDeliver(deliverer)` builds it. |
-| `intervalMs`        | `number` (optional)                    | Poll period. Defaults to 60 000.                                                   |
-| `onTickError`       | `(error) => void` (optional)           | A tick failed before delivering, such as a lost connection. The next tick retries. |
-| `onDeliveryError`   | `(error, schedule) => void` (optional) | One delivery failed.                                                               |
-| `onScheduleWaiting` | `(schedule) => void` (optional)        | A schedule started waiting for its agent's next run.                               |
-| `onScheduleStopped` | `(schedule) => void` (optional)        | A schedule stopped because its agent was deleted.                                  |
+| `opts`              | Type                                   | Purpose                                                                                                 |
+| ------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `db`                | `CronDb`                               | The hub's drizzle handle.                                                                               |
+| `deliver`           | `DeliverCronMail`                      | Sends one due schedule's mail. `createRunTriggerCronDeliver(deliverer)` builds it.                      |
+| `intervalMs`        | `number` (optional)                    | Poll period. Defaults to 60 000.                                                                        |
+| `onTickError`       | `(error) => void` (optional)           | A tick failed before delivering, such as a lost connection. The next tick retries.                      |
+| `onDeliveryError`   | `(error, schedule) => void` (optional) | One delivery failed.                                                                                    |
+| `onScheduleWaiting` | `(schedule) => void` (optional)        | A schedule started waiting for its agent's next run.                                                    |
+| `onScheduleStopped` | `(schedule) => void` (optional)        | A schedule stopped: `reason` is `agent_deleted`, or `invalid_expression` for a row that can never fire. |
 
 A deliverer throws an error carrying `RUN_GRANTS_NOT_ROUTABLE` or `RUN_MAIL_NOT_ROUTABLE` (checked with `isUnroutableRunTrigger`) when a run's address is dead. If that run's sidecar is already released, the ticker marks the run failed so the schedule waits for the agent's next run.
 
@@ -77,12 +77,12 @@ From `@corbits/cron/migrations`. Takes the same arguments as `@intx/db`'s `runMi
 
 ### Other exports
 
-| Export                                                                                                                             | Use                                                  |
-| ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `isValidCronExpression(expression)`                                                                                                | The check `POST /` runs.                             |
-| `nextCronFireAfter(expression, after)`                                                                                             | The next matching UTC minute after `after`.          |
-| `isUnroutableRunTrigger(error)`, `RUN_GRANTS_NOT_ROUTABLE`, `RUN_MAIL_NOT_ROUTABLE`                                                | The dead-address error contract a deliverer follows. |
-| `CronRoutesDeps`, `CreateCronTickerOpts`, `CronTicker`, `CronDb`, `DeliverCronMail`, `RunTriggerDeliverer`, `UnroutableRunTrigger` | Types for the above.                                 |
+| Export                                                                                                                             | Use                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `isValidCronExpression(expression)`                                                                                                | Syntax, range and cap check. `POST /` also requires a possible fire. |
+| `nextCronFireAfter(expression, after)`                                                                                             | The next matching UTC minute after `after`.                          |
+| `isUnroutableRunTrigger(error)`, `RUN_GRANTS_NOT_ROUTABLE`, `RUN_MAIL_NOT_ROUTABLE`                                                | The dead-address error contract a deliverer follows.                 |
+| `CronRoutesDeps`, `CreateCronTickerOpts`, `CronTicker`, `CronDb`, `DeliverCronMail`, `RunTriggerDeliverer`, `UnroutableRunTrigger` | Types for the above.                                                 |
 
 ## Using with Interchange
 
