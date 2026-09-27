@@ -49,7 +49,6 @@ export function installCron(
 
   const ticker = createCronTicker({
     db,
-    intervalMs: 60_000,
     deliver: createRunTriggerCronDeliver(deliverer),
     onDeliveryError: (error, schedule) => {
       if (onError) onError(error);
