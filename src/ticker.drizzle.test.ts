@@ -1,13 +1,14 @@
 // DB-gated: skipped when no DATABASE_URL is reachable. Migrations run into
 // a scratch schema so this test never touches a real tenant table;
-// `applyCronMigrations` is told that scratch schema so its `tenant_id` FK
+// `runCronMigrations` is told that scratch schema so its `tenant_id` FK
 // targets it.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { createDB, dropSchema, runMigrations, schema } from "@intx/db";
 import { eq } from "drizzle-orm";
 
-import { applyCronMigrations, cronScheduleTable } from "./schema.js";
+import { runCronMigrations } from "./migrations.js";
+import { cronScheduleTable } from "./schema.js";
 import { createCronTicker } from "./ticker.js";
 import { RUN_GRANTS_NOT_ROUTABLE } from "./deployment.js";
 import {
@@ -30,7 +31,7 @@ describeIfDb("createCronTicker", () => {
 
   beforeAll(async () => {
     await runMigrations(target, { schema: SCHEMA });
-    await applyCronMigrations(databaseUrl ?? "", { tenantSchema: SCHEMA });
+    await runCronMigrations(target, { schema: SCHEMA });
   });
 
   afterAll(async () => {
