@@ -1,7 +1,8 @@
-node_modules
-dist
-.tmp
+node_modules/
+dist/
 *.tsbuildinfo
+*.tgz
+coverage/
 .env
+.env.*
 .DS_Store
-*.log

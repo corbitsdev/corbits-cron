@@ -1,19 +1,21 @@
 {
   "compilerOptions": {
+    "esModuleInterop": true,
+    "skipLibCheck": true,
     "target": "ESNext",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ESNext"],
+    "moduleDetection": "force",
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "verbatimModuleSyntax": true,
-    "isolatedModules": true,
-    "skipLibCheck": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
     "noEmit": true,
-    "esModuleInterop": true,
-    "resolveJsonModule": true,
-    "allowImportingTsExtensions": true,
+    "lib": ["ESNext"],
     "types": ["bun"]
   },
-  "include": ["src/**/*.ts", "e2e/**/*.ts"]
+  "include": ["src", "e2e"]
 }
