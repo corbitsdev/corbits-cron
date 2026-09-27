@@ -228,6 +228,73 @@ describeIfDb("createCronTicker", () => {
     }
   });
 
+  test("a long-gap schedule fires; one that can never fire stops, fast", async () => {
+    const { db, close } = createDB(requireDatabase().config);
+    try {
+      const tenantId = `tnt_cron_expr_${randomUUID().slice(0, 8)}`;
+      await seedTenant(db, tenantId);
+      await seedDeployment(db, tenantId, "agent-expr-source");
+
+      const suffix = randomUUID().slice(0, 8);
+      const leapId = `sched_leap_${suffix}`;
+      const feb31Id = `sched_feb31_${suffix}`;
+      const hugeId = `sched_huge_${suffix}`;
+      const huge = Array.from({ length: 5000 }, () => "1").join(",");
+      const row = (id: string, expression: string, createdAt: Date) => ({
+        id,
+        tenantId,
+        expression,
+        definitionName: "agent-expr-source",
+        subject: id,
+        body: "b",
+        createdAt,
+      });
+      // Feb 29 2024 is more than a year after this row was saved.
+      await db
+        .insert(cronScheduleTable)
+        .values([
+          row(leapId, "0 0 29 2 *", new Date("2021-03-01T00:00:00Z")),
+          row(feb31Id, "0 0 31 2 *", new Date(Date.now() - 2 * 60_000)),
+          row(hugeId, `${huge} 0 31 2 *`, new Date(Date.now() - 2 * 60_000)),
+        ]);
+
+      const delivered: string[] = [];
+      const stopped: Array<{ id: string; reason: string }> = [];
+      const ticker = createCronTicker({
+        db,
+        intervalMs: 20,
+        deliver: (message) => {
+          delivered.push(message.subject);
+        },
+        onScheduleStopped: (schedule) =>
+          stopped.push({ id: schedule.id, reason: schedule.reason }),
+      });
+      const started = performance.now();
+      ticker.start();
+      // Polling, not a fixed sleep: tick latency follows DB load.
+      for (
+        let i = 0;
+        i < 250 && (delivered.length === 0 || stopped.length < 2);
+        i++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const elapsed = performance.now() - started;
+      ticker.stop();
+      // Let an in-flight tick settle before close() ends the client.
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(delivered).toEqual([leapId]);
+      expect(stopped.sort((a, b) => a.id.localeCompare(b.id))).toEqual([
+        { id: feb31Id, reason: "invalid_expression" },
+        { id: hugeId, reason: "invalid_expression" },
+      ]);
+      expect(elapsed).toBeLessThan(2_000);
+    } finally {
+      await close();
+    }
+  });
+
   test("two concurrent tickers deliver a due row exactly once", async () => {
     const { db: dbA, close: closeA } = createDB(requireDatabase().config);
     const { db: dbB, close: closeB } = createDB(requireDatabase().config);

@@ -4,7 +4,11 @@ import { describe, expect, test } from "bun:test";
 
 import {
   cronExpressionCanFire,
+  cronIsDue,
   cronMatchesMinute,
+  MAX_CRON_CLAUSES,
+  MAX_CRON_EXPRESSION_LENGTH,
+  parseCronExpression,
   isValidCronExpression,
   isValidTimeZone,
   nextCronFireAfter,
@@ -266,5 +270,106 @@ describe("timezone matching and DST", () => {
     );
     expect(next.toISOString()).toBe("2026-11-02T17:00:00.000Z");
     expect(zonedParts(next, "America/Los_Angeles").hour).toBe(9);
+  });
+});
+
+describe("step without a range end runs to the field maximum", () => {
+  test("5/2 on minutes is 5,7,…,59", () => {
+    const at = (minute: number) => new Date(Date.UTC(2026, 0, 1, 0, minute));
+    expect(cronMatchesMinute("5/2 * * * *", at(5))).toBe(true);
+    expect(cronMatchesMinute("5/2 * * * *", at(7))).toBe(true);
+    expect(cronMatchesMinute("5/2 * * * *", at(59))).toBe(true);
+    expect(cronMatchesMinute("5/2 * * * *", at(6))).toBe(false);
+    expect(cronMatchesMinute("5/2 * * * *", at(4))).toBe(false);
+  });
+});
+
+describe("limits", () => {
+  test("rejects an expression over the length cap", () => {
+    const long = `${"0,".repeat(MAX_CRON_EXPRESSION_LENGTH)}0 * * * *`;
+    expect(isValidCronExpression(long)).toBe(false);
+  });
+
+  test("rejects an expression over the clause cap", () => {
+    const clauses = Array.from({ length: MAX_CRON_CLAUSES }, () => "1").join(
+      ",",
+    );
+    expect(isValidCronExpression(`${clauses} * * * *`)).toBe(false);
+  });
+
+  test("never-firing expressions cannot fire; Feb 29 can", () => {
+    expect(cronExpressionCanFire("0 0 31 2 *")).toBe(false);
+    expect(cronExpressionCanFire("0 0 30 2 *")).toBe(false);
+    expect(cronExpressionCanFire("0 0 31 4,6,9,11 *")).toBe(false);
+    expect(cronExpressionCanFire("0 0 29 2 *")).toBe(true);
+    expect(cronExpressionCanFire("0 0 31 2 5")).toBe(true);
+  });
+});
+
+describe("cronIsDue", () => {
+  const parsed = (expression: string) => {
+    const result = parseCronExpression(expression);
+    if (result === undefined) throw new Error(`unparseable: ${expression}`);
+    return result;
+  };
+
+  test("a Feb 29 schedule created years earlier fires on Feb 29", () => {
+    const after = new Date("2025-03-01T00:00:00Z");
+    expect(
+      cronIsDue(parsed("0 0 29 2 *"), after, new Date("2028-02-28T23:59:00Z")),
+    ).toBe(false);
+    expect(
+      cronIsDue(parsed("0 0 29 2 *"), after, new Date("2028-02-29T00:00:30Z")),
+    ).toBe(true);
+  });
+
+  test("Feb 29 across the 2100 non-leap gap", () => {
+    expect(
+      nextCronFireAfter("0 0 29 2 *", new Date("2096-03-01T00:00:00Z")),
+    ).toEqual(new Date("2104-02-29T00:00:00Z"));
+  });
+
+  test("keeps Vixie OR when both day fields are restricted", () => {
+    // 2026-01-16 is a Friday, not the 13th.
+    expect(
+      cronIsDue(
+        parsed("0 0 13 * 5"),
+        new Date("2026-01-15T00:00:00Z"),
+        new Date("2026-01-16T00:00:00Z"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a row last fired decades ago costs a bounded scan", () => {
+    const start = performance.now();
+    expect(
+      cronIsDue(
+        parsed("0 0 29 2 *"),
+        new Date("1970-01-01T00:00:00Z"),
+        new Date("2027-12-31T00:00:00Z"),
+      ),
+    ).toBe(true);
+    expect(performance.now() - start).toBeLessThan(100);
+  });
+});
+
+describe("cost is bounded", () => {
+  test("a 5,000-clause expression is rejected without scanning", () => {
+    const big = Array.from({ length: 5000 }, () => "1").join(",");
+    const start = performance.now();
+    expect(parseCronExpression(`${big} 0 31 2 *`)).toBeUndefined();
+    expect(cronExpressionCanFire(`${big} 0 31 2 *`)).toBe(false);
+    expect(performance.now() - start).toBeLessThan(50);
+  });
+
+  test("the costliest accepted expression finds its fire quickly", () => {
+    const minutes = Array.from({ length: MAX_CRON_CLAUSES - 4 }, (_, i) =>
+      String(59 - i),
+    ).join(",");
+    const expression = `${minutes} 23 29 2 *`;
+    expect(isValidCronExpression(expression)).toBe(true);
+    const start = performance.now();
+    nextCronFireAfter(expression, new Date("2096-03-01T00:00:00Z"));
+    expect(performance.now() - start).toBeLessThan(100);
   });
 });

@@ -7,7 +7,7 @@ import { eq, and } from "drizzle-orm";
 import { Hono } from "hono";
 import { idResource, type RequireGrant, type TenantEnv } from "@intx/hub-api";
 
-import { isValidCronExpression } from "./cron.js";
+import { cronExpressionCanFire } from "./cron.js";
 import { definitionExists } from "./deployment.js";
 import { cronScheduleTable } from "./schema.js";
 import type { CronDb } from "./ticker.js";
@@ -46,7 +46,7 @@ export function createCronRoutes({
     if (parsed instanceof type.errors) {
       return c.json({ error: "invalid_body", detail: parsed.summary }, 400);
     }
-    if (!isValidCronExpression(parsed.expression)) {
+    if (!cronExpressionCanFire(parsed.expression)) {
       return c.json({ error: "invalid_expression" }, 400);
     }
     // Only a name no agent carries is a dead row from birth: an agent that is

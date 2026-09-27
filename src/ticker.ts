@@ -3,7 +3,7 @@
 import { eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
-import { nextCronFireAfter } from "./cron.js";
+import { cronIsDue, parseCronExpression, parsedCronCanFire } from "./cron.js";
 import {
   definitionExists,
   failStaleAnchorRun,
@@ -42,8 +42,9 @@ export type CreateCronTickerOpts<
   /** Told about a tick that failed before delivering, such as a lost DB
    * connection. The next tick retries. */
   onTickError?: (error: unknown) => void;
-  /** Told once when a schedule stops because the agent it targets was
-   * deleted. A later redeploy does not resume it. */
+  /** Told once when a schedule stops: `agent_deleted` when the agent it
+   * targets was deleted (a later redeploy does not resume it), or
+   * `invalid_expression` when its expression can never fire. */
   onScheduleStopped?: (schedule: {
     id: string;
     tenantId: string;
@@ -64,23 +65,25 @@ export type CronTicker = {
   stop(): void;
 };
 
+type Due = "due" | "idle" | "invalid";
+
 /** A freshly saved schedule is due at its first matching minute after
- * creation, not retroactively for every minute since the epoch. */
-function isDue(
+ * creation, not retroactively for every minute since the epoch. A row that
+ * can never fire (saved before the create route checked, or over today's
+ * caps) is "invalid" and stopped rather than re-scanned every tick. */
+function dueness(
   row: { expression: string; lastFiredAt: Date | null; createdAt: Date },
   now: Date,
-): boolean {
-  const after = row.lastFiredAt ?? row.createdAt;
-  try {
-    return nextCronFireAfter(row.expression, after) <= now;
-  } catch {
-    // report-error-ignore: an expression with no fire in the lookahead
-    // window is simply never due, not an operational failure.
-    return false;
-  }
+): Due {
+  const cron = parseCronExpression(row.expression);
+  if (cron === undefined || !parsedCronCanFire(cron)) return "invalid";
+  return cronIsDue(cron, row.lastFiredAt ?? row.createdAt, now)
+    ? "due"
+    : "idle";
 }
 
 const AGENT_DELETED = "agent_deleted";
+const INVALID_EXPRESSION = "invalid_expression";
 const DEFAULT_INTERVAL_MS = 60_000;
 
 async function tick<TSchema extends Record<string, unknown>>(
@@ -114,7 +117,22 @@ async function tick<TSchema extends Record<string, unknown>>(
       .where(isNull(cronScheduleTable.stoppedAt))
       .for("update", { skipLocked: true });
 
-    for (const row of candidates.filter((row) => isDue(row, now))) {
+    for (const row of candidates) {
+      const due = dueness(row, now);
+      if (due === "idle") continue;
+      if (due === "invalid") {
+        await tx
+          .update(cronScheduleTable)
+          .set({ stoppedAt: now, stoppedReason: INVALID_EXPRESSION })
+          .where(eq(cronScheduleTable.id, row.id));
+        onScheduleStopped({
+          id: row.id,
+          tenantId: row.tenantId,
+          definitionName: row.definitionName,
+          reason: INVALID_EXPRESSION,
+        });
+        continue;
+      }
       // The run behind a target dies on every restart and redeploy, so the
       // address is resolved now rather than stored.
       const deployment = await resolveLiveDeployment(

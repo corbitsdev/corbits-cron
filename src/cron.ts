@@ -22,14 +22,6 @@ export const CRON_FIELD_RANGES: Readonly<
   dayOfWeek: [0, 7],
 };
 
-const CRON_FIELD_ORDER: readonly CronField[] = [
-  "minute",
-  "hour",
-  "dayOfMonth",
-  "month",
-  "dayOfWeek",
-];
-
 type CronClause = {
   readonly base: "*" | number;
   readonly rangeEnd?: number;
@@ -68,80 +60,106 @@ function clauseInRange(
   return clause.rangeEnd >= clause.base;
 }
 
-/** Does `clause` match `value`? Star-with-step steps from `min`, not zero,
- * so on a 1-based day-of-month it yields 1,3,5… not 2,4,6…. */
-function clauseMatches(
-  clause: CronClause,
-  value: number,
-  min: number,
-): boolean {
-  if (clause.base === "*") {
-    return clause.step === undefined ? true : (value - min) % clause.step === 0;
-  }
-  if (clause.rangeEnd === undefined && clause.step === undefined) {
-    return value === clause.base;
-  }
-  const upper = clause.rangeEnd ?? clause.base;
-  if (value < clause.base || value > upper) return false;
-  if (clause.step === undefined) return true;
-  return (value - clause.base) % clause.step === 0;
+/** Every value `clause` allows in `[min, max]`. A step without a range end
+ * runs to the field maximum, so `5/2` on minutes is 5,7,…,59 (Vixie). */
+function clauseValues(clause: CronClause, min: number, max: number): number[] {
+  const start = clause.base === "*" ? min : clause.base;
+  const end =
+    clause.base === "*" ||
+    (clause.rangeEnd === undefined && clause.step !== undefined)
+      ? max
+      : (clause.rangeEnd ?? clause.base);
+  const step = clause.step ?? 1;
+  const values: number[] = [];
+  for (let value = start; value <= end; value += step) values.push(value);
+  return values;
 }
 
-function everyClause(
-  field: string,
-  test: (clause: CronClause) => boolean,
-): boolean {
-  const clauses = field.split(",").map(parseCronClause);
-  if (clauses.length === 0) return false;
-  return clauses.every((clause) => clause !== undefined && test(clause));
+/** Bounds parse and match cost: a longer expression is rejected, not
+ * scanned. */
+export const MAX_CRON_EXPRESSION_LENGTH = 256;
+export const MAX_CRON_CLAUSES = 64;
+
+/** A cron expression parsed once into its allowed values per field. */
+export type ParsedCron = {
+  readonly minutes: readonly boolean[];
+  readonly hours: readonly boolean[];
+  readonly daysOfMonth: readonly boolean[];
+  readonly months: readonly boolean[];
+  /** 0–6; an expression's 7 is folded onto 0 (Sunday). */
+  readonly daysOfWeek: readonly boolean[];
+  /** Vixie: DOM and DOW OR when both are restricted, otherwise AND. */
+  readonly dayFieldsOr: boolean;
+};
+
+// True when the field is restricted (not a bare wildcard or step-1). Vixie
+// OR-semantics for DOM/DOW only apply when both fields are restricted.
+function isDayFieldRestricted(field: string): boolean {
+  return field !== "*" && field !== "*/1";
 }
 
-function someClause(
+function parseField(
   field: string,
-  test: (clause: CronClause) => boolean,
-): boolean {
-  return field.split(",").some((raw) => {
+  [min, max]: readonly [number, number],
+): boolean[] | undefined {
+  const allowed = Array.from({ length: max + 1 }, () => false);
+  for (const raw of field.split(",")) {
     const clause = parseCronClause(raw);
-    return clause !== undefined && test(clause);
-  });
+    if (clause === undefined || !clauseInRange(clause, [min, max])) {
+      return undefined;
+    }
+    for (const value of clauseValues(clause, min, max)) allowed[value] = true;
+  }
+  return allowed;
+}
+
+/** Parses `expression`, or `undefined` when it is malformed, out of range or
+ * over the length or clause cap. */
+export function parseCronExpression(
+  expression: string,
+): ParsedCron | undefined {
+  if (expression.length > MAX_CRON_EXPRESSION_LENGTH) return undefined;
+  const fields = expression.trim().split(/\s+/);
+  if (fields.length !== 5) return undefined;
+  if (fields.join(",").split(",").length > MAX_CRON_CLAUSES) return undefined;
+  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  const minutes = parseField(minute, CRON_FIELD_RANGES.minute);
+  const hours = parseField(hour, CRON_FIELD_RANGES.hour);
+  const daysOfMonth = parseField(dayOfMonth, CRON_FIELD_RANGES.dayOfMonth);
+  const months = parseField(month, CRON_FIELD_RANGES.month);
+  const weekdays = parseField(dayOfWeek, CRON_FIELD_RANGES.dayOfWeek);
+  if (
+    minutes === undefined ||
+    hours === undefined ||
+    daysOfMonth === undefined ||
+    months === undefined ||
+    weekdays === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    minutes,
+    hours,
+    daysOfMonth,
+    months,
+    daysOfWeek: weekdays
+      .slice(0, 7)
+      .map((on, day) => on || (day === 0 && weekdays[7] === true)),
+    dayFieldsOr:
+      isDayFieldRestricted(dayOfMonth) && isDayFieldRestricted(dayOfWeek),
+  };
 }
 
 /** Loud, eager syntax + range validation (never a fire-time surprise like a
  * minute of 60). Whether it can ever actually fire is `cronExpressionCanFire`. */
 export function isValidCronExpression(expression: string): boolean {
-  const fields = expression.trim().split(/\s+/);
-  if (fields.length !== 5) return false;
-  return fields.every((field, index) => {
-    const cronField = CRON_FIELD_ORDER[index];
-    if (cronField === undefined) return false;
-    return everyClause(field, (clause) =>
-      clauseInRange(clause, CRON_FIELD_RANGES[cronField]),
-    );
-  });
-}
-
-function fieldMatches(field: string, value: number, min: number): boolean {
-  return someClause(field, (clause) => clauseMatches(clause, value, min));
-}
-
-/** Day-of-week match with 0/7 both meaning Sunday. */
-function dayOfWeekMatches(field: string, dayOfWeek: number): boolean {
-  const [min] = CRON_FIELD_RANGES.dayOfWeek;
-  if (fieldMatches(field, dayOfWeek, min)) return true;
-  // Date APIs report Sunday as 0; expressions may say 7.
-  if (dayOfWeek === 0 && fieldMatches(field, 7, min)) return true;
-  return false;
-}
-
-// True when the field is restricted (not a bare wildcard or step-1). Vixie
-// OR-semantics for DOM/DOW only apply when both fields are restricted.
-function isDayFieldRestricted(field: string): boolean {
-  const trimmed = field.trim();
-  if (trimmed === "*") return false;
-  // `*/1` is every day — unrestricted in effect — but any other form
-  // (including `*/2`, `1-5`, `1,15`) is a restriction.
-  if (trimmed === "*/1") return false;
-  return true;
+  return parseCronExpression(expression) !== undefined;
 }
 
 export type ZonedParts = {
@@ -223,6 +241,21 @@ export function isValidTimeZone(timeZone: string): boolean {
   }
 }
 
+function dayMatches(cron: ParsedCron, parts: ZonedParts): boolean {
+  if (cron.months[parts.month] !== true) return false;
+  const dom = cron.daysOfMonth[parts.day] === true;
+  const dow = cron.daysOfWeek[parts.dayOfWeek] === true;
+  return cron.dayFieldsOr ? dom || dow : dom && dow;
+}
+
+function parseOrThrow(expression: string): ParsedCron {
+  const cron = parseCronExpression(expression);
+  if (cron === undefined) {
+    throw new Error(`"${expression}" is not a valid cron expression`);
+  }
+  return cron;
+}
+
 /** True when `expression` matches the wall-clock minute of `at` in
  * `timeZone`. DOM and DOW OR when both are restricted; otherwise AND. */
 export function cronMatchesMinute(
@@ -230,37 +263,13 @@ export function cronMatchesMinute(
   at: Date,
   timeZone: string = "UTC",
 ): boolean {
-  const fields = expression.trim().split(/\s+/);
-  const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
-  if (
-    minute === undefined ||
-    hour === undefined ||
-    dayOfMonth === undefined ||
-    month === undefined ||
-    dayOfWeek === undefined
-  ) {
-    throw new Error(`"${expression}" is not a 5-field cron expression`);
-  }
-
+  const cron = parseOrThrow(expression);
   const parts = zonedParts(at, timeZone);
-  const timeAndMonth =
-    fieldMatches(minute, parts.minute, CRON_FIELD_RANGES.minute[0]) &&
-    fieldMatches(hour, parts.hour, CRON_FIELD_RANGES.hour[0]) &&
-    fieldMatches(month, parts.month, CRON_FIELD_RANGES.month[0]);
-  if (!timeAndMonth) return false;
-
-  const domOk = fieldMatches(
-    dayOfMonth,
-    parts.day,
-    CRON_FIELD_RANGES.dayOfMonth[0],
+  return (
+    dayMatches(cron, parts) &&
+    cron.hours[parts.hour] === true &&
+    cron.minutes[parts.minute] === true
   );
-  const dowOk = dayOfWeekMatches(dayOfWeek, parts.dayOfWeek);
-
-  if (isDayFieldRestricted(dayOfMonth) && isDayFieldRestricted(dayOfWeek)) {
-    // Vixie: either day-of-month or day-of-week may match.
-    return domOk || dowOk;
-  }
-  return domOk && dowOk;
 }
 
 /** The UTC minute `at` falls in, as a stable, comparable integer key. */
@@ -268,9 +277,39 @@ function minuteKey(at: Date): number {
   return Math.floor(at.getTime() / 60_000);
 }
 
-/** Bounds how far ahead `nextCronFireAfter` searches — one leap year is
- * enough for any expression that fires at least annually. */
-export const MAX_LOOKAHEAD_MINUTES = 366 * 24 * 60;
+/** Bounds every search. Eight years plus a day covers the longest gap any
+ * valid expression has: Feb 29 across a skipped century leap year. */
+export const MAX_LOOKAHEAD_MINUTES = (8 * 366 + 1) * 24 * 60;
+
+/** The first matching minute key in `[from, to]`, or `undefined`. Skips
+ * whole non-matching hours and days, so a scan costs a few steps per day
+ * however long the expression. Offsets are whole minutes and every skip
+ * stops at or before the next local hour or midnight, so DST cannot jump
+ * past a match. */
+function firstMatchBetween(
+  cron: ParsedCron,
+  from: number,
+  to: number,
+  timeZone: string,
+): number | undefined {
+  let minute = from;
+  while (minute <= to) {
+    const parts = zonedParts(new Date(minute * 60_000), timeZone);
+    const toNextHour = 60 - parts.minute;
+    if (!dayMatches(cron, parts)) {
+      minute += Math.max(toNextHour, (23 - parts.hour) * 60 - parts.minute);
+      continue;
+    }
+    if (cron.hours[parts.hour] !== true) {
+      minute += toNextHour;
+      continue;
+    }
+    const next = cron.minutes.indexOf(true, parts.minute);
+    if (next === parts.minute) return minute;
+    minute += next === -1 ? toNextHour : next - parts.minute;
+  }
+  return undefined;
+}
 
 /** The next minute at or after `after` (exclusive) that `expression`
  * matches. Always returns a UTC instant, even when matching is zoned. */
@@ -280,31 +319,54 @@ export function nextCronFireAfter(
   timeZone: string = "UTC",
 ): Date {
   const start = minuteKey(after) + 1;
-  for (let minute = start; minute - start <= MAX_LOOKAHEAD_MINUTES; minute++) {
-    const candidate = new Date(minute * 60_000);
-    if (cronMatchesMinute(expression, candidate, timeZone)) return candidate;
-  }
-  throw new Error(
-    `"${expression}" has no fire time within the lookahead window` +
-      (timeZone === "UTC" ? "" : ` in ${timeZone}`),
+  const next = firstMatchBetween(
+    parseOrThrow(expression),
+    start,
+    start + MAX_LOOKAHEAD_MINUTES,
+    timeZone,
   );
+  if (next === undefined) {
+    throw new Error(
+      `"${expression}" has no fire time within the lookahead window` +
+        (timeZone === "UTC" ? "" : ` in ${timeZone}`),
+    );
+  }
+  return new Date(next * 60_000);
 }
 
-/** True when `expression` has at least one fire inside the lookahead window
- * from `from`. Used at save time to reject an impossible expression. */
+/** True when a UTC minute after `after` and at or before `now` matches.
+ * Only the last lookahead window before `now` is searched: a valid
+ * expression fires inside every such window, so an old `after` never
+ * makes the scan longer or hides a fire. */
+export function cronIsDue(cron: ParsedCron, after: Date, now: Date): boolean {
+  const to = minuteKey(now);
+  const from = Math.max(minuteKey(after) + 1, to - MAX_LOOKAHEAD_MINUTES);
+  return firstMatchBetween(cron, from, to, "UTC") !== undefined;
+}
+
+const DAYS_IN_MONTH = [0, 31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** Arithmetic, no scan. Hours and minutes always have a value, and a
+ * restricted DOW fires every month, so only a DOM-only day list can miss
+ * every chosen month (Feb 30, Apr 31). Feb 29 counts: leap years come. */
+export function parsedCronCanFire(cron: ParsedCron): boolean {
+  return cron.months.some((inMonth, month) => {
+    if (!inMonth) return false;
+    if (cron.dayFieldsOr) return true;
+    const dayFits = cron.daysOfMonth.some(
+      (on, day) => on && day <= (DAYS_IN_MONTH[month] ?? 0),
+    );
+    return dayFits && cron.daysOfWeek.some(Boolean);
+  });
+}
+
+/** True when `expression` is valid and some minute ever matches it. Used
+ * at save time to reject an impossible expression. */
 export function cronExpressionCanFire(
   expression: string,
   timeZone: string = "UTC",
-  from: Date = new Date(0),
 ): boolean {
-  if (!isValidCronExpression(expression)) return false;
   if (!isValidTimeZone(timeZone)) return false;
-  try {
-    nextCronFireAfter(expression, from, timeZone);
-    return true;
-  } catch {
-    // report-error-ignore: next-fire throws on impossible expressions;
-    // that is the false signal, not an operational failure.
-    return false;
-  }
+  const cron = parseCronExpression(expression);
+  return cron !== undefined && parsedCronCanFire(cron);
 }
