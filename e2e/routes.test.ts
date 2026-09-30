@@ -4,7 +4,11 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { createDB } from "@intx/db";
 import type { RequireGrant, TenantEnv } from "@intx/hub-api";
+import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
+
+import { cronScheduleTable } from "../src/schema.js";
+import { createCronTicker } from "../src/ticker.js";
 
 import {
   createTestDatabase,
@@ -104,6 +108,66 @@ describeIfDb("createCronRoutes", () => {
         body: "b",
       });
       expect(leap.status).toBe(201);
+    } finally {
+      await close();
+    }
+  });
+
+  test("a paused schedule is skipped by the ticker; resume restarts its clock", async () => {
+    const { db, close } = createDB(requireDatabase().config);
+    try {
+      const tenantId = `tnt_cron_pause_${randomUUID().slice(0, 8)}`;
+      await seedTenant(db, tenantId);
+      await seedDeployment(db, tenantId, "agent-pause-source");
+      const app = cronRoutesApp(db, tenantId, allowAll);
+      const id = `sched_pause_${randomUUID().slice(0, 8)}`;
+      await db.insert(cronScheduleTable).values({
+        id,
+        tenantId,
+        expression: "* * * * *",
+        definitionName: "agent-pause-source",
+        subject: "s",
+        body: "b",
+        createdAt: new Date(Date.now() - 5 * 60_000),
+      });
+
+      const paused = await app.request(`/cron/${id}/pause`, { method: "POST" });
+      expect(paused.status).toBe(200);
+      expect(
+        ((await paused.json()) as { schedule: { enabled: boolean } }).schedule
+          .enabled,
+      ).toBe(false);
+
+      const delivered: string[] = [];
+      const ticker = createCronTicker({
+        db,
+        intervalMs: 50,
+        deliver: (message) => {
+          delivered.push(message.subject);
+        },
+      });
+      ticker.start();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      ticker.stop();
+      expect(delivered).toEqual([]);
+
+      const resumed = await app.request(`/cron/${id}/resume`, {
+        method: "POST",
+      });
+      expect(resumed.status).toBe(200);
+      const [row] = await db
+        .select()
+        .from(cronScheduleTable)
+        .where(eq(cronScheduleTable.id, id));
+      expect(row?.enabled).toBe(true);
+      // Restarted at now, not due for the five paused minutes.
+      expect(Date.now() - (row?.lastFiredAt?.getTime() ?? 0)).toBeLessThan(
+        30_000,
+      );
+
+      expect(
+        (await app.request("/cron/missing/pause", { method: "POST" })).status,
+      ).toBe(404);
     } finally {
       await close();
     }

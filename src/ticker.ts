@@ -1,6 +1,6 @@
 // Turns due cron schedules into mail. A schedule that missed several ticks
 // fires once for the most recent due minute, never once per missed tick.
-import { eq, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
 import { cronIsDue, parseCronExpression, parsedCronCanFire } from "./cron.js";
@@ -123,7 +123,12 @@ async function tick<TSchema extends Record<string, unknown>>(
     const candidates = await tx
       .select()
       .from(cronScheduleTable)
-      .where(isNull(cronScheduleTable.stoppedAt))
+      .where(
+        and(
+          isNull(cronScheduleTable.stoppedAt),
+          eq(cronScheduleTable.enabled, true),
+        ),
+      )
       .for("update", { skipLocked: true });
 
     for (const row of candidates) {

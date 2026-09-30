@@ -86,5 +86,31 @@ export function createCronRoutes({
     },
   );
 
+  // Resume restarts the clock at now: a schedule is due from its last fire,
+  // so keeping the old one would fire at once for the paused minutes.
+  for (const [path, enabled] of [
+    ["pause", false],
+    ["resume", true],
+  ] as const) {
+    app.post(
+      `/:id/${path}`,
+      requireGrant(idResource("cron-schedule", "id"), "manage"),
+      async (c) => {
+        const [row] = await db
+          .update(cronScheduleTable)
+          .set(enabled ? { enabled, lastFiredAt: new Date() } : { enabled })
+          .where(
+            and(
+              eq(cronScheduleTable.tenantId, c.get("tenant").id),
+              eq(cronScheduleTable.id, c.req.param("id")),
+            ),
+          )
+          .returning();
+        if (row === undefined) return c.json({ error: "not_found" }, 404);
+        return c.json({ schedule: row });
+      },
+    );
+  }
+
   return app;
 }

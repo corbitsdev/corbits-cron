@@ -17,4 +17,6 @@ CREATE TABLE IF NOT EXISTS "cron"."schedule" (
 -- Tables created before waiting_since existed.
 ALTER TABLE "cron"."schedule" ADD COLUMN IF NOT EXISTS "waiting_since" timestamptz;
 --> statement-breakpoint
+ALTER TABLE "cron"."schedule" ADD COLUMN IF NOT EXISTS "enabled" boolean NOT NULL DEFAULT true;
+--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "cron_schedule_tenant_id_idx" ON "cron"."schedule" ("tenant_id");
