@@ -2,7 +2,7 @@
 
 A Corbits hub module that wakes Interchange agents on five-field UTC cron schedules, mounted as `@intx/hub-api` routes on the hub (Interchange's multi-tenant control plane) and stored in its Postgres. A ticker mails each due schedule to its agent's current run, the running instance of the agent's workflow definition.
 
-Schedules support create, list and delete. There is no edit: delete and recreate. An expression must be able to fire (no Feb 30), at most 256 characters and 64 comma clauses.
+Schedules support create, list, pause, resume and delete. There is no edit: delete and recreate. An expression must be able to fire (no Feb 30), at most 256 characters and 64 comma clauses.
 
 ## Why @corbits/cron?
 
@@ -49,11 +49,13 @@ Prints the next 09:00 UTC, the next time a schedule with that expression fires.
 
 Paths are relative to where the host mounts the sub-app.
 
-| Method | Path   | Grant                         | Purpose                                                                                                                                            |
-| ------ | ------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/`    | `cron-schedule:*` `read`      | `{ schedules: [...] }` for the caller's tenant.                                                                                                    |
-| POST   | `/`    | `cron-schedule:*` `create`    | Create from `{ expression, definitionName, subject, body }`. 201 `{ schedule }`; 400 `invalid_body`, `invalid_expression` or `unknown_definition`. |
-| DELETE | `/:id` | `cron-schedule:<id>` `manage` | Delete one schedule. `{ ok: true }`; 404 `not_found` when it is not in the caller's tenant.                                                        |
+| Method | Path          | Grant                         | Purpose                                                                                                                                            |
+| ------ | ------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/`           | `cron-schedule:*` `read`      | `{ schedules: [...] }` for the caller's tenant.                                                                                                    |
+| POST   | `/`           | `cron-schedule:*` `create`    | Create from `{ expression, definitionName, subject, body }`. 201 `{ schedule }`; 400 `invalid_body`, `invalid_expression` or `unknown_definition`. |
+| POST   | `/:id/pause`  | `cron-schedule:<id>` `manage` | Stop the ticker firing it. `{ schedule }` with `enabled: false`; 404 `not_found`.                                                                  |
+| POST   | `/:id/resume` | `cron-schedule:<id>` `manage` | Fire again from the next matching minute after now. `{ schedule }` with `enabled: true`; 404 `not_found`.                                          |
+| DELETE | `/:id`        | `cron-schedule:<id>` `manage` | Delete one schedule. `{ ok: true }`; 404 `not_found` when it is not in the caller's tenant.                                                        |
 
 ### `createCronTicker(opts)`
 

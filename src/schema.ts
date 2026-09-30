@@ -1,7 +1,13 @@
 // The `cron` schema's one table: a tenant's saved cron schedules. Kept on
 // its own Postgres schema, with a real FK back to Interchange's `tenant`
 // table, so it never collides with the host's own tables.
-import { pgTable, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  pgTable,
+  pgSchema,
+  text,
+  timestamp,
+} from "drizzle-orm/pg-core";
 
 const hostTenant = pgTable("tenant", { id: text("id").primaryKey() });
 
@@ -18,6 +24,8 @@ export const cronScheduleTable = cronSchema.table("schedule", {
   definitionName: text("definition_name").notNull(),
   subject: text("subject").notNull(),
   body: text("body").notNull(),
+  // False while paused: the ticker skips the row until it is resumed.
+  enabled: boolean("enabled").notNull().default(true),
   lastFiredAt: timestamp("last_fired_at", { withTimezone: true }),
   // Set while the agent exists but has no live run — a hub restart, say.
   // Cleared by the first tick that delivers again.
