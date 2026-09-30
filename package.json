@@ -1,6 +1,6 @@
 {
   "name": "@corbits/cron",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Cron schedules for an Interchange hub: grant-gated schedule routes plus a ticker that turns a due row into run-trigger mail",
   "keywords": [
     "corbits",
