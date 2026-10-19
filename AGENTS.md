@@ -34,3 +34,9 @@ does not own mail transport, run lifecycle or grants; those come from the host.
 ```sh
 bun install && bun run check
 ```
+
+## Conventions
+
+- Read `README.md` before changing public behavior.
+- Keep changes focused; update docs and tests alongside code changes.
+- Run `bun run check` before declaring work complete.
