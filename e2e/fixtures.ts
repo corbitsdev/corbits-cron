@@ -81,8 +81,10 @@ export async function seedAllocation(
     anchorRunId,
     tenantId,
     provisionerId: "prov_test",
-    provisionerApiVersion: 1,
+    provisionerApiVersion: 2,
     provisionerBindingFingerprint: "fp_test",
+    adapterManifestDigest: "digest_test",
+    maxDisconnectedMs: 1000,
     status,
   });
 }
